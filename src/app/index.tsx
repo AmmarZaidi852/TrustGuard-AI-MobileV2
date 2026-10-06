@@ -1,98 +1,194 @@
-import * as Device from 'expo-device';
-import { Platform, StyleSheet } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import Ionicons from '@expo/vector-icons/Ionicons';
+import { type Href, router } from 'expo-router';
+import { Pressable, StyleSheet, View } from 'react-native';
 
-import { AnimatedIcon } from '@/components/animated-icon';
-import { HintRow } from '@/components/hint-row';
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { WebBadge } from '@/components/web-badge';
-import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
+import {
+  AppText,
+  Card,
+  type IconName,
+  Notice,
+  Pill,
+  Section,
+  Screen,
+} from '@/components/ui/primitives';
+import { ASSESSMENT_META, formatRelativeTime, resultTitle } from '@/core/presentation';
+import type { AnalysisKind, AnalysisResult } from '@/core/types';
+import { useHistory } from '@/hooks/use-history';
+import { config } from '@/services/config';
+import { clearHistory } from '@/services/history/history-store';
+import { radius, spacing, useTheme } from '@/theme/theme';
 
-function getDevMenuHint() {
-  if (Platform.OS === 'web') {
-    return <ThemedText type="small">use browser devtools</ThemedText>;
-  }
-  if (Device.isDevice) {
-    return (
-      <ThemedText type="small">
-        shake device or press <ThemedText type="code">m</ThemedText> in terminal
-      </ThemedText>
-    );
-  }
-  const shortcut = Platform.OS === 'android' ? 'cmd+m (or ctrl+m)' : 'cmd+d';
+const OPTIONS: {
+  kind: AnalysisKind;
+  title: string;
+  description: string;
+  icon: IconName;
+  href: Href;
+}[] = [
+  {
+    kind: 'text',
+    title: 'Analyze text',
+    description: 'Paste a post, message or article excerpt.',
+    icon: 'document-text-outline',
+    href: '/analyze/text',
+  },
+  {
+    kind: 'image',
+    title: 'Analyze image',
+    description: 'Check a photo or screenshot for signs of editing.',
+    icon: 'image-outline',
+    href: '/analyze/image',
+  },
+  {
+    kind: 'claim',
+    title: 'Analyze claim',
+    description: 'Check one specific factual statement.',
+    icon: 'search-outline',
+    href: '/analyze/claim',
+  },
+];
+
+const KIND_ICON: Record<AnalysisKind, IconName> = {
+  text: 'document-text-outline',
+  claim: 'search-outline',
+  image: 'image-outline',
+};
+
+export default function HomeScreen() {
+  const theme = useTheme();
+  const history = useHistory();
+
   return (
-    <ThemedText type="small">
-      press <ThemedText type="code">{shortcut}</ThemedText>
-    </ThemedText>
+    <Screen topInset>
+      <View style={styles.brand}>
+        <View style={[styles.logo, { backgroundColor: theme.primary }]}>
+          <Ionicons name="shield-checkmark" size={22} color={theme.primaryText} />
+        </View>
+        <AppText variant="heading">TrustGuardAI</AppText>
+      </View>
+
+      <View style={{ gap: spacing.sm }}>
+        <AppText variant="display" accessibilityRole="header">
+          Check what you see before you trust it.
+        </AppText>
+        <AppText muted>
+          See what a piece of content claims, how well the evidence supports it, and why.
+        </AppText>
+      </View>
+
+      {!config.apiBaseUrl ? (
+        <Notice tone="neutral" title="AI analysis not connected">
+          Text and claims are checked with on-device language and claim heuristics only. No AI or
+          evidence verification runs yet, so claims will be marked as unverified.
+        </Notice>
+      ) : null}
+
+      <View style={{ gap: spacing.md }}>
+        {OPTIONS.map((option) => (
+          <Pressable
+            key={option.kind}
+            accessibilityRole="button"
+            accessibilityLabel={option.title}
+            accessibilityHint={option.description}
+            onPress={() => router.push(option.href)}>
+            {({ pressed }) => (
+              <Card style={[styles.option, { opacity: pressed ? 0.85 : 1 }]}>
+                <View style={[styles.optionIcon, { backgroundColor: theme.tones.info.bg }]}>
+                  <Ionicons name={option.icon} size={22} color={theme.tones.info.fg} />
+                </View>
+                <View style={{ flex: 1, gap: 2 }}>
+                  <AppText variant="heading">{option.title}</AppText>
+                  <AppText variant="small" muted>
+                    {option.description}
+                  </AppText>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={theme.textSubtle} />
+              </Card>
+            )}
+          </Pressable>
+        ))}
+      </View>
+
+      <Section
+        title="Recent analyses"
+        right={
+          history && history.length > 0 ? (
+            <Pressable accessibilityRole="button" onPress={clearHistory} hitSlop={8}>
+              <AppText variant="caption" color={theme.accent} style={{ fontWeight: '600' }}>
+                Clear
+              </AppText>
+            </Pressable>
+          ) : null
+        }>
+        {history === null ? null : history.length === 0 ? (
+          <Card>
+            <AppText variant="small" muted>
+              Your analyses will appear here. They are stored only on this device.
+            </AppText>
+          </Card>
+        ) : (
+          <Card style={{ paddingVertical: spacing.xs }}>
+            {history.slice(0, 8).map((item, index) => (
+              <RecentRow key={item.id} item={item} first={index === 0} />
+            ))}
+          </Card>
+        )}
+      </Section>
+    </Screen>
   );
 }
 
-export default function HomeScreen() {
+function RecentRow({ item, first }: { item: AnalysisResult; first: boolean }) {
+  const theme = useTheme();
+  const meta = ASSESSMENT_META[item.assessment.label];
   return (
-    <ThemedView style={styles.container}>
-      <SafeAreaView style={styles.safeArea}>
-        <ThemedView style={styles.heroSection}>
-          <AnimatedIcon />
-          <ThemedText type="title" style={styles.title}>
-            Welcome to&nbsp;Expo
-          </ThemedText>
-        </ThemedView>
-
-        <ThemedText type="code" style={styles.code}>
-          get started
-        </ThemedText>
-
-        <ThemedView type="backgroundElement" style={styles.stepContainer}>
-          <HintRow
-            title="Try editing"
-            hint={<ThemedText type="code">src/app/index.tsx</ThemedText>}
-          />
-          <HintRow title="Dev tools" hint={getDevMenuHint()} />
-          <HintRow
-            title="Fresh start"
-            hint={<ThemedText type="code">npm run reset-project</ThemedText>}
-          />
-        </ThemedView>
-
-        {Platform.OS === 'web' && <WebBadge />}
-      </SafeAreaView>
-    </ThemedView>
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`${meta.title}: ${resultTitle(item)}`}
+      onPress={() => router.push({ pathname: '/result/[id]', params: { id: item.id } })}
+      style={({ pressed }) => [
+        styles.recent,
+        { borderTopColor: theme.border, borderTopWidth: first ? 0 : StyleSheet.hairlineWidth },
+        pressed && { opacity: 0.7 },
+      ]}>
+      <Ionicons name={KIND_ICON[item.kind]} size={18} color={theme.textSubtle} />
+      <View style={{ flex: 1, gap: 4 }}>
+        <AppText variant="small" numberOfLines={2}>
+          {resultTitle(item)}
+        </AppText>
+        <View style={styles.recentMeta}>
+          <Pill label={meta.title} tone={meta.tone} />
+          <AppText variant="caption" subtle>
+            {formatRelativeTime(item.createdAt)}
+          </AppText>
+        </View>
+      </View>
+    </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
+  brand: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginTop: spacing.sm },
+  logo: {
+    width: 36,
+    height: 36,
+    borderRadius: radius.sm,
+    alignItems: 'center',
     justifyContent: 'center',
+  },
+  option: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  optionIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: radius.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  recent: {
     flexDirection: 'row',
+    gap: spacing.md,
+    paddingVertical: spacing.md,
+    alignItems: 'flex-start',
   },
-  safeArea: {
-    flex: 1,
-    paddingHorizontal: Spacing.four,
-    alignItems: 'center',
-    gap: Spacing.three,
-    paddingBottom: BottomTabInset + Spacing.three,
-    maxWidth: MaxContentWidth,
-  },
-  heroSection: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    flex: 1,
-    paddingHorizontal: Spacing.four,
-    gap: Spacing.four,
-  },
-  title: {
-    textAlign: 'center',
-  },
-  code: {
-    textTransform: 'uppercase',
-  },
-  stepContainer: {
-    gap: Spacing.three,
-    alignSelf: 'stretch',
-    paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.four,
-    borderRadius: Spacing.four,
-  },
+  recentMeta: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
 });

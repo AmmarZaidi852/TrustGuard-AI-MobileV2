@@ -1,0 +1,6 @@
+node_modules
+dist
+.expo
+coverage
+package-lock.json
+assets

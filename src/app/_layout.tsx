@@ -1,18 +1,41 @@
-import { DarkTheme, DefaultTheme, ThemeProvider } from 'expo-router';
-import * as SplashScreen from 'expo-splash-screen';
-import { useColorScheme } from 'react-native';
+import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from 'expo-router';
+import { StatusBar } from 'expo-status-bar';
 
-import { AnimatedSplashOverlay } from '@/components/animated-icon';
-import AppTabs from '@/components/app-tabs';
+import { useIsDark, useTheme } from '@/theme/theme';
 
-SplashScreen.preventAutoHideAsync();
+export default function RootLayout() {
+  const isDark = useIsDark();
+  const theme = useTheme();
+  const navigationTheme = isDark ? DarkTheme : DefaultTheme;
 
-export default function TabLayout() {
-  const colorScheme = useColorScheme();
   return (
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <AnimatedSplashOverlay />
-      <AppTabs />
+    <ThemeProvider
+      value={{
+        ...navigationTheme,
+        colors: {
+          ...navigationTheme.colors,
+          background: theme.background,
+          card: theme.background,
+          text: theme.text,
+          border: theme.border,
+          primary: theme.primary,
+        },
+      }}>
+      <StatusBar style={isDark ? 'light' : 'dark'} />
+      <Stack
+        screenOptions={{
+          headerShadowVisible: false,
+          headerTintColor: theme.primary,
+          headerTitleStyle: { color: theme.text, fontWeight: '600' },
+          headerBackButtonDisplayMode: 'minimal',
+          contentStyle: { backgroundColor: theme.background },
+        }}>
+        <Stack.Screen name="index" options={{ headerShown: false, title: 'TrustGuardAI' }} />
+        <Stack.Screen name="analyze/text" options={{ title: 'Analyze text' }} />
+        <Stack.Screen name="analyze/claim" options={{ title: 'Analyze claim' }} />
+        <Stack.Screen name="analyze/image" options={{ title: 'Analyze image' }} />
+        <Stack.Screen name="result/[id]" options={{ title: 'Assessment' }} />
+      </Stack>
     </ThemeProvider>
   );
 }
