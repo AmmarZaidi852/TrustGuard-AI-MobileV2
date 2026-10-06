@@ -1,8 +1,10 @@
+import type { ClaimAnalysisRequest } from '@/core/api-contract';
 import {
   CLAIM_TYPE_LABELS,
   describeEvidenceNeeded,
   extractClaims,
   extractSingleClaim,
+  scoreSpecificity,
 } from '@/core/claims/claim-extraction';
 import { AnalysisUnavailableError, ServiceUnavailableError, toUserMessage } from '@/core/errors';
 import { assessTrust } from '@/core/scoring/trust-scoring';
@@ -26,8 +28,9 @@ import { type ImageInput, validateImageInput, validateTextInput } from '@/core/v
 import type { AnalysisProviders } from '../providers/types';
 
 /**
- * Orchestrates an analysis: validation → claim extraction → language signals →
- * model analysis + evidence retrieval → source evaluation → trust scoring.
+ * Orchestrates an analysis: validation → on-device claim extraction + language
+ * signals → AI claim analysis (extraction, classification, assessment) →
+ * evidence retrieval → source evaluation → trust scoring.
  *
  * Each external step is isolated: if it is unavailable or fails, that is
  * recorded in `components` and the assessment is downgraded accordingly —
@@ -67,37 +70,69 @@ const skipped = (component: AnalysisComponent, detail: string): ComponentReport 
 });
 
 interface Verification {
+  claim: ExtractedClaim | null;
   model: ModelClaimAnalysis | null;
   evidence: EvidenceItem[];
   evidenceStatus: EvidenceStatus;
   reports: ComponentReport[];
 }
 
-async function verifyClaim(
-  claim: ExtractedClaim | null,
-  context: string,
+/** The model's restatement of the claim replaces the on-device heuristic when available. */
+function claimFromModel(
+  model: ModelClaimAnalysis,
+  fallback: ExtractedClaim | null,
+): ExtractedClaim | null {
+  const text = model.extractedClaim || fallback?.text;
+  if (!text) return fallback;
+  return {
+    text,
+    type: model.claimType,
+    checkable: model.verifiable,
+    specificity: scoreSpecificity(text),
+    method: 'model',
+  };
+}
+
+/**
+ * AI analysis of the content, then (for checkable claims) evidence retrieval and
+ * source evaluation. Without AI, falls back to the heuristic claim.
+ */
+async function verifyContent(
+  content: ClaimAnalysisRequest | null,
+  heuristicClaim: ExtractedClaim | null,
   providers: AnalysisProviders,
 ): Promise<Verification> {
+  const modelStep = content
+    ? await runStep('llm_analysis', () => providers.claimAnalyzer.analyzeClaim(content))
+    : null;
+  const model = modelStep?.value ?? null;
+  const claim = model ? claimFromModel(model, heuristicClaim) : heuristicClaim;
+  const modelReport: ComponentReport = !modelStep
+    ? skipped('llm_analysis', 'No text to analyze.')
+    : model
+      ? { ...modelStep.report, detail: `Model: ${model.model}` }
+      : modelStep.report;
+
   if (!claim || !claim.checkable) {
     const reason = !claim
       ? 'No factual claim was found.'
-      : `${CLAIM_TYPE_LABELS[claim.type]}s cannot be fact-checked.`;
+      : `${CLAIM_TYPE_LABELS[claim.type]}: not something that can be fact-checked.`;
     return {
-      model: null,
+      claim,
+      model,
       evidence: [],
       evidenceStatus: 'not_searched',
       reports: [
-        skipped('llm_analysis', reason),
+        modelReport,
         skipped('evidence_retrieval', reason),
         skipped('source_evaluation', reason),
       ],
     };
   }
 
-  const [model, retrieved] = await Promise.all([
-    runStep('llm_analysis', () => providers.claimAnalyzer.analyzeClaim(claim, context)),
-    runStep('evidence_retrieval', () => providers.evidenceRetriever.findEvidence(claim)),
-  ]);
+  const retrieved = await runStep('evidence_retrieval', () =>
+    providers.evidenceRetriever.findEvidence(claim),
+  );
 
   const evidence: EvidenceItem[] = (retrieved.value ?? []).map((item, index) => ({
     ...item,
@@ -121,10 +156,19 @@ async function verifyClaim(
       : skipped('source_evaluation', 'No sources to evaluate.');
 
   return {
-    model: model.value,
+    claim,
+    model,
     evidence,
     evidenceStatus,
-    reports: [model.report, retrieved.report, sourceReport],
+    reports: [modelReport, retrieved.report, sourceReport],
+  };
+}
+
+function claimExtractionReport(claim: ExtractedClaim | null, source: string): ComponentReport {
+  return {
+    component: 'claim_extraction',
+    status: 'completed',
+    detail: claim?.method === 'model' ? `AI model (${source})` : `On-device heuristic (${source})`,
   };
 }
 
@@ -135,16 +179,36 @@ function buildReasoning(params: {
   authenticity: ImageAuthenticityAnalysis | null;
 }): string[] {
   const { claim, indicators, verification, authenticity } = params;
+  const { model } = verification;
   const lines: string[] = [];
 
-  if (verification.model?.reasoning) {
-    lines.push(verification.model.reasoning);
+  if (model?.reasoning) {
+    lines.push(model.reasoning);
+  } else {
+    const modelReport = verification.reports.find((r) => r.component === 'llm_analysis');
+    if (modelReport?.status === 'unavailable' || modelReport?.status === 'failed') {
+      lines.push(
+        `AI analysis did not run (${modelReport.detail ?? 'unavailable'}), so only on-device checks were used.`,
+      );
+    }
+  }
+  if (model && !model.verifiable && model.verifiabilityNote) {
+    lines.push(model.verifiabilityNote);
   }
   if (claim) {
+    const who =
+      claim.method === 'model'
+        ? 'The AI classified the main claim'
+        : 'The main statement was classified on-device';
     lines.push(
-      `The main statement was classified as: ${CLAIM_TYPE_LABELS[claim.type].toLowerCase()}` +
-        (claim.specificity < 0.35 ? '. It is vague, which makes it harder to verify.' : '.'),
+      `${who} as: ${CLAIM_TYPE_LABELS[claim.type].toLowerCase()}` +
+        (claim.specificity < 0.35 && claim.checkable
+          ? '. It is fairly vague, which makes it harder to verify.'
+          : '.'),
     );
+  }
+  if (model?.limitations) {
+    lines.push(`Limitations: ${model.limitations}`);
   }
 
   const concerns = indicators.filter(
@@ -177,7 +241,7 @@ function buildReasoning(params: {
     case 'not_searched':
       if (claim?.checkable) {
         lines.push(
-          'No evidence search was available, so the claim has not been checked against sources.',
+          'Evidence search is not connected yet, so the claim has not been checked against independent sources.',
         );
       }
       break;
@@ -195,7 +259,6 @@ function buildReasoning(params: {
 function assemble(params: {
   kind: AnalysisKind;
   input: AnalysisResult['input'];
-  claim: ExtractedClaim | null;
   keyStatements: string[];
   indicators: Indicator[];
   verification: Verification;
@@ -204,7 +267,8 @@ function assemble(params: {
   reports: ComponentReport[];
   options: PipelineOptions;
 }): AnalysisResult {
-  const { claim, verification, authenticity, options } = params;
+  const { verification, authenticity, options } = params;
+  const { claim } = verification;
   const indicators = [...params.indicators, ...(verification.model?.indicators ?? [])];
 
   const assessment = assessTrust({
@@ -261,19 +325,25 @@ export async function analyzeText(
       : extractClaims(text);
 
   const indicators = detectLanguageSignals(text);
-  const verification = await verifyClaim(extraction.claim, text, providers);
+  const verification = await verifyContent({ text, mode }, extraction.claim, providers);
+
+  // AI analysis is the core of a text/claim check: if it did not run, show an error
+  // the user can retry rather than a degraded result that looks like an assessment.
+  if (!verification.model) {
+    const report = verification.reports.find((r) => r.component === 'llm_analysis');
+    throw new AnalysisUnavailableError(report?.detail ?? 'AI analysis is unavailable right now.');
+  }
 
   return assemble({
     kind: mode,
     input: { text },
-    claim: extraction.claim,
     keyStatements: extraction.keyStatements,
     indicators,
     verification,
     authenticity: null,
     extractedText: null,
     reports: [
-      { component: 'claim_extraction', status: 'completed', detail: 'On-device heuristic' },
+      claimExtractionReport(verification.claim, 'from your text'),
       { component: 'language_signals', status: 'completed', detail: 'On-device heuristic' },
     ],
     options,
@@ -308,13 +378,17 @@ export async function analyzeImage(
   const hasText = text.length >= MIN_OCR_TEXT && text.split(/\s+/).length >= 3;
   const extraction = hasText ? extractClaims(text) : { claim: null, keyStatements: [] };
   const indicators = hasText ? detectLanguageSignals(text) : [];
-  const verification = await verifyClaim(extraction.claim, text, providers);
+  const verification = await verifyContent(
+    hasText ? { text, mode: 'text' } : null,
+    extraction.claim,
+    providers,
+  );
 
   const reports: ComponentReport[] = [
     vision.report,
     ocr.report,
     hasText
-      ? { component: 'claim_extraction', status: 'completed', detail: 'From text in the image' }
+      ? claimExtractionReport(verification.claim, 'from text in the image')
       : skipped('claim_extraction', 'No readable text was found in the image.'),
   ];
   if (hasText) {
@@ -331,7 +405,6 @@ export async function analyzeImage(
       imageUri: image.uri.startsWith('blob:') ? undefined : image.uri,
       text: text || undefined,
     },
-    claim: extraction.claim,
     keyStatements: extraction.keyStatements,
     indicators,
     verification,

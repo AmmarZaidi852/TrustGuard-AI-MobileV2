@@ -65,7 +65,11 @@ export function Screen({
       edges={topInset ? ['top', 'bottom', 'left', 'right'] : ['bottom', 'left', 'right']}
       style={[styles.screen, { backgroundColor: theme.background }]}>
       {scroll ? (
-        <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+        <ScrollView
+          contentContainerStyle={styles.scroll}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="interactive"
+          automaticallyAdjustKeyboardInsets>
           {content}
         </ScrollView>
       ) : (

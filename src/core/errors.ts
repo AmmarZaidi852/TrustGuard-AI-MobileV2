@@ -1,3 +1,5 @@
+import type { ApiErrorCode } from './api-contract';
+
 /** Input rejected before any analysis ran. */
 export class ValidationError extends Error {
   constructor(message: string) {
@@ -23,6 +25,8 @@ export class ServiceRequestError extends Error {
     message: string,
     readonly kind: 'network' | 'timeout' | 'http' | 'invalid_response',
     readonly status?: number,
+    /** Error code from the TrustGuardAI backend, when it sent one. */
+    readonly code?: ApiErrorCode,
   ) {
     super(message);
     this.name = 'ServiceRequestError';
@@ -53,7 +57,20 @@ export function toUserMessage(error: unknown): string {
       case 'invalid_response':
         return 'The analysis service returned an unexpected response.';
       case 'http':
-        return `The analysis service returned an error${error.status ? ` (${error.status})` : ''}.`;
+        switch (error.code) {
+          case 'rate_limited':
+            return 'Too many analyses in a short time. Wait a few minutes and try again.';
+          case 'model_refused':
+            return 'The AI model declined to analyze this content, so no assessment was made.';
+          case 'model_unavailable':
+            return 'The AI service is temporarily unavailable. Please try again shortly.';
+          case 'invalid_model_output':
+            return 'The AI returned an incomplete analysis, so it was not used. Please try again.';
+          case 'invalid_request':
+            return error.message;
+          default:
+            return `The analysis service returned an error${error.status ? ` (${error.status})` : ''}.`;
+        }
     }
   }
   return 'Something went wrong while analyzing this content.';

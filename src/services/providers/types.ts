@@ -1,3 +1,4 @@
+import type { ClaimAnalysisRequest } from '@/core/api-contract';
 import type {
   EvidenceStance,
   ExtractedClaim,
@@ -13,8 +14,9 @@ import type { ImageInput } from '@/core/validation';
  * Swapping models or vendors only requires a new implementation of these.
  */
 
+/** AI claim analysis: extracts, classifies and assesses the central claim of the content. */
 export interface ClaimAnalyzer {
-  analyzeClaim(claim: ExtractedClaim, context: string): Promise<ModelClaimAnalysis>;
+  analyzeClaim(request: ClaimAnalysisRequest): Promise<ModelClaimAnalysis>;
 }
 
 /** Evidence as returned by retrieval, before on-device source evaluation. */

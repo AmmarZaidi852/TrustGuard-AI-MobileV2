@@ -92,13 +92,39 @@ export interface EvidenceItem {
 export type EvidenceStatus = 'found' | 'none_found' | 'not_searched' | 'failed';
 
 /** Output of an LLM claim analysis (provided by the backend in a later phase). */
+export type ModelStance = 'supported' | 'contradicted' | 'disputed' | 'unverifiable';
+
+export const CLAIM_TYPES: readonly ClaimType[] = [
+  'factual',
+  'statistical',
+  'scientific_health',
+  'event_news',
+  'quote_attribution',
+  'opinion',
+  'prediction',
+  'unknown',
+];
+
+/**
+ * Output of the AI claim analysis (served by the backend). The model's stance is
+ * one signal among several: it never sets the final assessment label on its own.
+ */
 export interface ModelClaimAnalysis {
-  stance: 'supported' | 'contradicted' | 'disputed' | 'unverifiable';
+  /** The central factual claim, restated neutrally by the model. */
+  extractedClaim: string;
+  claimType: ClaimType;
+  /** Whether the claim can be fact-checked at all (false for opinions, predictions, vague claims). */
+  verifiable: boolean;
+  verifiabilityNote: string;
+  stance: ModelStance;
   /** 0..1 self-reported model confidence; treated as one signal, not ground truth. */
   confidence: number;
   reasoning: string;
+  /** Key findings, as indicators with origin `model`. */
   indicators: Indicator[];
   evidenceNeeded: string[];
+  /** What the model could not assess (e.g. events after its training data). */
+  limitations: string;
   model: string;
 }
 

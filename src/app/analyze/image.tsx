@@ -7,7 +7,7 @@ import { AppText, Button, Card, Notice, Screen } from '@/components/ui/primitive
 import type { ImageInput } from '@/core/validation';
 import { useAnalysisRunner } from '@/hooks/use-analysis-runner';
 import { analyzeImage } from '@/services/analysis/pipeline';
-import { config } from '@/services/config';
+import { capabilities } from '@/services/providers';
 import { radius, spacing, useTheme } from '@/theme/theme';
 
 const CHECKS = [
@@ -105,7 +105,7 @@ export default function AnalyzeImageScreen() {
         disabled={isRunning}
       />
 
-      {!config.apiBaseUrl ? (
+      {!capabilities.imageAnalysis ? (
         <Notice tone="neutral" title="Image analysis not connected">
           The image model and text extraction aren’t connected yet, so images can’t be analyzed.
           TrustGuardAI won’t show a result it hasn’t actually computed.

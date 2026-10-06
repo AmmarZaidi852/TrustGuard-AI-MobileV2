@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import { createUnavailableProviders } from '@/services/providers/unavailable';
+import { mockModelContradicted, mockProviders } from '@/test/fixtures';
 
 import { analyzeText } from '../analysis/pipeline';
 import {
@@ -14,9 +14,14 @@ import {
 
 let counter = 0;
 const makeResult = () =>
-  analyzeText('NASA discovered life on Mars.', 'claim', createUnavailableProviders(), {
-    createId: () => `id-${counter++}`,
-  });
+  analyzeText(
+    'NASA discovered life on Mars.',
+    'claim',
+    mockProviders({ model: mockModelContradicted }),
+    {
+      createId: () => `id-${counter++}`,
+    },
+  );
 
 beforeEach(async () => {
   await AsyncStorage.clear();

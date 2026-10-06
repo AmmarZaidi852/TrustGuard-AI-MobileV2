@@ -9,11 +9,26 @@ import type { AnalysisProviders, RetrievedEvidence } from '@/services/providers/
 import { createUnavailableProviders } from '@/services/providers/unavailable';
 
 export const mockModelContradicted: ModelClaimAnalysis = {
+  extractedClaim: 'Drinking coffee completely prevents cancer.',
+  claimType: 'scientific_health',
+  verifiable: true,
+  verifiabilityNote: '',
   stance: 'contradicted',
   confidence: 0.85,
   reasoning: '[mock] Large studies associate coffee with modest risk changes, not prevention.',
-  indicators: [],
+  indicators: [
+    {
+      id: 'model_0',
+      label: '[mock] Overstates a modest association',
+      description: '[mock] Observational studies do not show complete prevention.',
+      direction: 'raises_concern',
+      weight: 0.5,
+      origin: 'model',
+      excerpt: 'completely prevents cancer',
+    },
+  ],
   evidenceNeeded: ['[mock] Systematic reviews of coffee and cancer risk'],
+  limitations: '',
   model: 'mock-model',
 };
 
@@ -21,6 +36,28 @@ export const mockModelSupported: ModelClaimAnalysis = {
   ...mockModelContradicted,
   stance: 'supported',
   reasoning: '[mock] Widely documented.',
+};
+
+export const mockModelUnverifiable: ModelClaimAnalysis = {
+  ...mockModelContradicted,
+  extractedClaim: 'A local council in a small town voted to close its library last night.',
+  claimType: 'event_news',
+  stance: 'unverifiable',
+  confidence: 0.3,
+  reasoning: '[mock] This concerns a recent local event outside the model knowledge.',
+  indicators: [],
+  limitations: '[mock] Knowledge cutoff; recent local news is not covered.',
+};
+
+export const mockModelOpinion: ModelClaimAnalysis = {
+  ...mockModelContradicted,
+  extractedClaim: 'This phone is the best ever made.',
+  claimType: 'opinion',
+  verifiable: false,
+  verifiabilityNote: '[mock] This is a value judgement, not a checkable fact.',
+  stance: 'unverifiable',
+  confidence: 0.2,
+  indicators: [],
 };
 
 export const mockContradictingEvidence: RetrievedEvidence[] = [
@@ -103,8 +140,8 @@ export function mockProviders(overrides: {
         : Promise.resolve(value);
   return {
     claimAnalyzer: {
-      analyzeClaim: (claim, ctx) =>
-        respond(overrides.model, () => base.claimAnalyzer.analyzeClaim(claim, ctx)),
+      analyzeClaim: (request) =>
+        respond(overrides.model, () => base.claimAnalyzer.analyzeClaim(request)),
     },
     evidenceRetriever: {
       findEvidence: (claim) =>

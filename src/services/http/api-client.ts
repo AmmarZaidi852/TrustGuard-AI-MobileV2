@@ -1,8 +1,20 @@
+import type { ApiErrorBody, ApiErrorCode } from '@/core/api-contract';
 import { ServiceRequestError } from '@/core/errors';
 
 export interface PostJsonOptions {
   timeoutMs: number;
   fetchImpl?: typeof fetch;
+}
+
+async function readApiError(
+  response: Response,
+): Promise<{ code?: ApiErrorCode; message?: string }> {
+  try {
+    const body = (await response.json()) as Partial<ApiErrorBody>;
+    return { code: body.error?.code, message: body.error?.message };
+  } catch {
+    return {};
+  }
 }
 
 /** POSTs JSON and maps every failure mode to a typed {@link ServiceRequestError}. */
@@ -35,7 +47,13 @@ export async function postJson<T = unknown>(
   }
 
   if (!response.ok) {
-    throw new ServiceRequestError(`HTTP ${response.status}`, 'http', response.status);
+    const apiError = await readApiError(response);
+    throw new ServiceRequestError(
+      apiError.message ?? `HTTP ${response.status}`,
+      'http',
+      response.status,
+      apiError.code,
+    );
   }
 
   try {

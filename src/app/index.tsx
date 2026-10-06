@@ -14,7 +14,7 @@ import {
 import { ASSESSMENT_META, formatRelativeTime, resultTitle } from '@/core/presentation';
 import type { AnalysisKind, AnalysisResult } from '@/core/types';
 import { useHistory } from '@/hooks/use-history';
-import { config } from '@/services/config';
+import { capabilities } from '@/services/providers';
 import { clearHistory } from '@/services/history/history-store';
 import { radius, spacing, useTheme } from '@/theme/theme';
 
@@ -76,10 +76,10 @@ export default function HomeScreen() {
         </AppText>
       </View>
 
-      {!config.apiBaseUrl ? (
-        <Notice tone="neutral" title="AI analysis not connected">
-          Text and claims are checked with on-device language and claim heuristics only. No AI or
-          evidence verification runs yet, so claims will be marked as unverified.
+      {!capabilities.evidenceSearch ? (
+        <Notice tone="neutral" title="Source checking coming soon">
+          AI analysis is live, but it isn’t checked against independent sources yet. Until it is,
+          TrustGuardAI won’t mark a claim as “Likely reliable” or “Likely false”.
         </Notice>
       ) : null}
 
@@ -113,7 +113,16 @@ export default function HomeScreen() {
         title="Recent analyses"
         right={
           history && history.length > 0 ? (
-            <Pressable accessibilityRole="button" onPress={clearHistory} hitSlop={8}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Clear recent analyses"
+              onPress={clearHistory}
+              style={{
+                minHeight: 44,
+                minWidth: 44,
+                justifyContent: 'center',
+                alignItems: 'flex-end',
+              }}>
               <AppText variant="caption" color={theme.accent} style={{ fontWeight: '600' }}>
                 Clear
               </AppText>

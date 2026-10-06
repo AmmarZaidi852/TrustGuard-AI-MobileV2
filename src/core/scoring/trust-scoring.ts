@@ -236,10 +236,11 @@ export function chooseLabel(
   }
   if (score === null) return 'cannot_verify';
   if (input.model?.stance === 'unverifiable' && relevant.length === 0) {
-    return 'insufficient_evidence';
+    return input.evidenceStatus === 'none_found' ? 'insufficient_evidence' : 'cannot_verify';
   }
 
-  const strong = confidence >= THRESHOLDS.minConfidenceForStrongLabel;
+  // Strong labels need independent evidence: the model's own knowledge is never enough.
+  const strong = confidence >= THRESHOLDS.minConfidenceForStrongLabel && relevant.length > 0;
   if (score >= THRESHOLDS.reliable) return strong ? 'likely_reliable' : 'needs_verification';
   if (score <= THRESHOLDS.false) return strong ? 'likely_false' : 'possibly_misleading';
   if (score < THRESHOLDS.misleading) return 'possibly_misleading';
@@ -283,21 +284,41 @@ export function assessTrust(input: ScoringInput): TrustAssessment {
   const label = chooseLabel(input, score, confidence);
   const concern = languageConcernIntensity(input.indicators);
 
-  let summary = SUMMARIES[label];
-  if (label === 'cannot_verify' && input.claim && !input.claim.checkable) {
-    summary =
-      input.claim.type === 'opinion'
-        ? 'This reads as an opinion, which cannot be verified as true or false.'
-        : 'This is a prediction about the future, which cannot be verified yet.';
-  }
-
   return {
     label,
     score,
     confidence,
     riskLevel: riskFromScore(score, concern),
     factors,
-    summary,
+    summary: summarize(input, label),
     recommendation: RECOMMENDATIONS[label],
   };
+}
+
+const MODEL_ONLY_SUMMARIES: Record<ModelClaimAnalysis['stance'], string> = {
+  supported:
+    'The AI analysis found this claim broadly consistent with established knowledge, but no independent sources were checked, so it is not confirmed.',
+  contradicted:
+    'The AI analysis found that this claim conflicts with established knowledge. No independent sources were checked yet, so treat this as a strong warning, not a final verdict.',
+  disputed:
+    'The AI analysis found this claim is disputed, exaggerated or only partly accurate. No independent sources were checked yet.',
+  unverifiable:
+    'The AI model could not assess this claim from its own knowledge (for example, it may be too recent or too specific). That does not mean it is false.',
+};
+
+function summarize(input: ScoringInput, label: AssessmentLabel): string {
+  const { claim, model } = input;
+  if (claim && !claim.checkable) {
+    if (claim.type === 'opinion') {
+      return 'This reads as an opinion, which cannot be verified as true or false.';
+    }
+    if (claim.type === 'prediction') {
+      return 'This is a prediction about the future, which cannot be verified yet.';
+    }
+    return 'This statement cannot be fact-checked as written, for example because it is too vague.';
+  }
+  if (model && relevantEvidence(input.evidence).length === 0) {
+    return MODEL_ONLY_SUMMARIES[model.stance];
+  }
+  return SUMMARIES[label];
 }

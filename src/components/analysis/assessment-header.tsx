@@ -37,7 +37,7 @@ export function AssessmentHeader({ result }: { result: AnalysisResult }) {
             </AppText>
             <AppText variant="caption" subtle>
               {CLAIM_TYPE_LABELS[claim.type]}
-              {claim.method === 'heuristic' ? ' · identified on-device' : ''}
+              {claim.method === 'model' ? ' · identified by AI' : ' · identified on-device'}
             </AppText>
           </>
         ) : (

@@ -7,11 +7,11 @@ import {
   joinList,
 } from '@/core/presentation';
 import { analyzeImage, analyzeText } from '@/services/analysis/pipeline';
-import { createUnavailableProviders } from '@/services/providers/unavailable';
 import {
   mockAuthenticity,
   mockContradictingEvidence,
   mockModelContradicted,
+  mockModelUnverifiable,
   mockOcr,
   mockProviders,
 } from '@/test/fixtures';
@@ -22,13 +22,23 @@ const COFFEE =
   'BREAKING: Scientists have confirmed that drinking coffee completely prevents cancer.';
 
 describe('ResultView', () => {
-  it('shows claim, assessment and the partial-analysis notice when services are missing', async () => {
-    const result = await analyzeText(COFFEE, 'text', createUnavailableProviders());
+  it('shows the AI claim, a model-only assessment and the partial-analysis notice', async () => {
+    const result = await analyzeText(
+      COFFEE,
+      'text',
+      mockProviders({ model: mockModelContradicted }),
+    );
     await render(<ResultView result={result} />);
 
-    expect(screen.getByTestId('claim-text')).toHaveTextContent(/coffee completely prevents cancer/);
-    expect(screen.getByTestId('assessment-label')).toHaveTextContent('Cannot verify');
-    expect(screen.getByText('Not scored')).toBeTruthy();
+    expect(screen.getByTestId('claim-text')).toHaveTextContent(
+      `“${mockModelContradicted.extractedClaim}”`,
+    );
+    expect(screen.getByText(/identified by AI/)).toBeTruthy();
+    expect(screen.getByTestId('assessment-label')).toHaveTextContent('Possibly misleading');
+    expect(screen.getByText(/No independent sources were checked yet/)).toBeTruthy();
+    expect(screen.getByText(mockModelContradicted.reasoning)).toBeTruthy();
+    expect(screen.getByText('[mock] Overstates a modest association')).toBeTruthy();
+    expect(screen.getByText('Reported by AI model')).toBeTruthy();
     expect(screen.getByText('Partial analysis')).toBeTruthy();
     expect(screen.getByTestId('evidence-status')).toHaveTextContent(/not connected/);
     // No image dimension for text analyses.
@@ -66,7 +76,11 @@ describe('dimension wording', () => {
       'text',
       mockProviders({ model: mockModelContradicted, evidence: mockContradictingEvidence }),
     );
-    const unverified = await analyzeText(COFFEE, 'text', createUnavailableProviders());
+    const unverified = await analyzeText(
+      COFFEE,
+      'text',
+      mockProviders({ model: mockModelUnverifiable }),
+    );
 
     const authenticity = describeAuthenticity(image)!.answer;
     expect(authenticity).toMatch(/commonly associated with AI generation/);

@@ -19,7 +19,19 @@ function evidence(stance: EvidenceStance, url: string): EvidenceItem {
 }
 
 function model(stance: ModelClaimAnalysis['stance'], confidence = 0.85): ModelClaimAnalysis {
-  return { stance, confidence, reasoning: '', indicators: [], evidenceNeeded: [], model: 'm' };
+  return {
+    extractedClaim: claim.text,
+    claimType: claim.type,
+    verifiable: true,
+    verifiabilityNote: '',
+    stance,
+    confidence,
+    reasoning: '',
+    indicators: [],
+    evidenceNeeded: [],
+    limitations: '',
+    model: 'm',
+  };
 }
 
 const base: ScoringInput = {
@@ -118,9 +130,64 @@ describe('assessTrust', () => {
     expect(result.label).toBe('needs_verification');
   });
 
-  it('treats a model "unverifiable" verdict with no evidence as insufficient evidence', () => {
-    const result = assessTrust({ ...base, model: model('unverifiable', 0.7) });
-    expect(result.label).toBe('insufficient_evidence');
+  it('maps a model "unverifiable" verdict to cannot verify, or insufficient evidence after a search', () => {
+    const notSearched = assessTrust({ ...base, model: model('unverifiable', 0.7) });
+    expect(notSearched.label).toBe('cannot_verify');
+    expect(notSearched.summary).toMatch(/does not mean it is false/);
+
+    const searched = assessTrust({
+      ...base,
+      model: model('unverifiable', 0.7),
+      evidenceStatus: 'none_found',
+    });
+    expect(searched.label).toBe('insufficient_evidence');
+  });
+
+  describe('model-only analysis (no independent evidence)', () => {
+    const veryCertainSpecificClaim = { ...claim, specificity: 1 };
+
+    it('never produces "Likely false", even at maximum confidence', () => {
+      const result = assessTrust({
+        ...base,
+        claim: veryCertainSpecificClaim,
+        model: model('contradicted', 0.9),
+      });
+      expect(result.label).toBe('possibly_misleading');
+      expect(result.summary).toMatch(/No independent sources were checked/);
+      expect(result.riskLevel).toBe('high');
+    });
+
+    it('never produces "Likely reliable", even at maximum confidence', () => {
+      const result = assessTrust({
+        ...base,
+        claim: veryCertainSpecificClaim,
+        model: model('supported', 0.9),
+      });
+      expect(result.label).toBe('needs_verification');
+      expect(result.summary).toMatch(/not confirmed/);
+    });
+
+    it('treats a disputed claim as possibly misleading or needing verification', () => {
+      const result = assessTrust({ ...base, model: model('disputed', 0.6) });
+      expect(['possibly_misleading', 'needs_verification']).toContain(result.label);
+      expect(result.summary).toMatch(/disputed/);
+    });
+
+    it('lets low model confidence pull the score towards neutral', () => {
+      const confident = assessTrust({ ...base, model: model('contradicted', 0.9) });
+      const unsure = assessTrust({ ...base, model: model('contradicted', 0.1) });
+      expect(unsure.score!).toBeGreaterThan(confident.score!);
+      expect(unsure.confidence).toBeLessThan(confident.confidence);
+    });
+  });
+
+  it('explains claims that are too vague to check', () => {
+    const result = assessTrust({
+      ...base,
+      claim: { ...claim, type: 'factual', checkable: false },
+    });
+    expect(result.label).toBe('cannot_verify');
+    expect(result.summary).toMatch(/too vague/);
   });
 
   it('exposes every factor transparently, with unavailable ones marked null', () => {

@@ -1,12 +1,15 @@
-import { ServiceRequestError, ValidationError } from '@/core/errors';
-import type {
-  AuthenticityFinding,
-  EvidenceStance,
-  ImageAuthenticityAnalysis,
-  Indicator,
-  Likelihood,
-  ModelClaimAnalysis,
-  OcrResult,
+import { API_ROUTES } from '@/core/api-contract';
+import { ServiceRequestError, ServiceUnavailableError, ValidationError } from '@/core/errors';
+import { normalizeModelAnalysis } from '@/core/model/model-analysis';
+import {
+  type AuthenticityFinding,
+  CLAIM_TYPES,
+  type EvidenceStance,
+  type ImageAuthenticityAnalysis,
+  type Indicator,
+  type Likelihood,
+  type ModelClaimAnalysis,
+  type OcrResult,
 } from '@/core/types';
 import type { ImageInput } from '@/core/validation';
 
@@ -18,13 +21,6 @@ import type { AnalysisProviders, RetrievedEvidence } from './types';
  * Every response is validated at runtime; malformed responses are rejected
  * rather than partially trusted.
  */
-
-const ENDPOINTS = {
-  claim: '/v1/claims/analyze',
-  evidence: '/v1/evidence/search',
-  vision: '/v1/images/analyze',
-  ocr: '/v1/images/ocr',
-} as const;
 
 type Json = Record<string, unknown>;
 
@@ -88,14 +84,20 @@ export function parseClaimAnalysis(body: unknown): ModelClaimAnalysis {
     origin: 'model',
     excerpt: str(item, 'excerpt', true) || undefined,
   }));
-  return {
+  if (typeof data.verifiable !== 'boolean') invalid('verifiable');
+  return normalizeModelAnalysis({
+    extractedClaim: str(data, 'extractedClaim'),
+    claimType: oneOf(data, 'claimType', CLAIM_TYPES),
+    verifiable: data.verifiable as boolean,
+    verifiabilityNote: str(data, 'verifiabilityNote', true),
     stance: oneOf(data, 'stance', STANCES),
     confidence: unit(data, 'confidence'),
     reasoning: str(data, 'reasoning'),
     indicators,
     evidenceNeeded: strings(data, 'evidenceNeeded'),
+    limitations: str(data, 'limitations', true),
     model: str(data, 'model'),
-  };
+  });
 }
 
 export function parseEvidence(body: unknown): RetrievedEvidence[] {
@@ -149,26 +151,40 @@ export function createRemoteProviders(
   timeoutMs: number,
   fetchImpl?: typeof fetch,
 ): AnalysisProviders {
-  const post = (path: string, body: unknown) =>
-    postJson(`${baseUrl}${path}`, body, { timeoutMs, fetchImpl });
+  const post = async (path: string, body: unknown, service: string) => {
+    try {
+      return await postJson(`${baseUrl}${path}`, body, { timeoutMs, fetchImpl });
+    } catch (error) {
+      if (error instanceof ServiceRequestError && error.code === 'not_configured') {
+        throw new ServiceUnavailableError(service, `${service} is not set up on the server yet.`);
+      }
+      if (error instanceof ServiceRequestError && error.code === 'invalid_request') {
+        throw new ValidationError(error.message);
+      }
+      throw error;
+    }
+  };
 
   return {
     claimAnalyzer: {
-      analyzeClaim: async (claim, context) =>
-        parseClaimAnalysis(
-          await post(ENDPOINTS.claim, { claim: claim.text, type: claim.type, context }),
-        ),
+      analyzeClaim: async (request) =>
+        parseClaimAnalysis(await post(API_ROUTES.claimAnalysis, request, 'AI claim analysis')),
     },
     evidenceRetriever: {
       findEvidence: async (claim) =>
-        parseEvidence(await post(ENDPOINTS.evidence, { claim: claim.text })),
+        parseEvidence(
+          await post(API_ROUTES.evidenceSearch, { claim: claim.text }, 'Evidence search'),
+        ),
     },
     visionAnalyzer: {
       analyzeImage: async (image) =>
-        parseImageAnalysis(await post(ENDPOINTS.vision, imagePayload(image))),
+        parseImageAnalysis(
+          await post(API_ROUTES.imageAnalysis, imagePayload(image), 'Image analysis'),
+        ),
     },
     ocr: {
-      extractText: async (image) => parseOcr(await post(ENDPOINTS.ocr, imagePayload(image))),
+      extractText: async (image) =>
+        parseOcr(await post(API_ROUTES.ocr, imagePayload(image), 'Text extraction (OCR)')),
     },
   };
 }
