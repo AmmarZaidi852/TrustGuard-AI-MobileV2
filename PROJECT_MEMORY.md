@@ -22,7 +22,7 @@ facts go here; limitations are stated explicitly.
 | 4. Image analysis (vision + OCR feeding claims into verification)    | **Next**    | –         |
 | 5. Hardening                                                         | Not started | –         |
 
-## Phase 3: source discovery and claim checking
+## Phase 3: source discovery and claim checking (`53f26ae`, pushed to main)
 
 **Architecture:** app → `POST /api/v1/evidence/search` → Claude with `web_search_20260209`
 (source discovery; sources only from API citations; URLs validated; max 6) → Claude structured
