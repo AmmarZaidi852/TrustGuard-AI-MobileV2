@@ -2,13 +2,12 @@ import type { ClaimAnalysisRequest } from '@/core/api-contract';
 import type {
   EvidenceStance,
   ExtractedClaim,
-  ImageAuthenticityAnalysis,
+  ImageClaimAnalysis,
   ModelClaimAnalysis,
-  OcrResult,
   SourceEvaluation,
   SourceRelevance,
 } from '@/core/types';
-import type { ImageInput } from '@/core/validation';
+import type { ValidatedImage } from '@/core/validation';
 
 /**
  * Contracts for external analysis services. Each one is implemented by a backend
@@ -47,17 +46,16 @@ export interface EvidenceRetriever {
   findEvidence(claim: ExtractedClaim): Promise<EvidenceSearchResult>;
 }
 
+/**
+ * Claude vision: reads the image's text and extracts the claims in it. It does not
+ * verify claims; the primary claim goes through the normal claim + source pipeline.
+ */
 export interface VisionAnalyzer {
-  analyzeImage(image: ImageInput): Promise<ImageAuthenticityAnalysis>;
-}
-
-export interface OcrProvider {
-  extractText(image: ImageInput): Promise<OcrResult>;
+  analyzeImage(image: ValidatedImage): Promise<ImageClaimAnalysis>;
 }
 
 export interface AnalysisProviders {
   claimAnalyzer: ClaimAnalyzer;
   evidenceRetriever: EvidenceRetriever;
   visionAnalyzer: VisionAnalyzer;
-  ocr: OcrProvider;
 }

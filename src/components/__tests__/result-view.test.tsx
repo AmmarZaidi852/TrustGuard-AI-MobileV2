@@ -8,11 +8,12 @@ import {
 } from '@/core/presentation';
 import { analyzeImage, analyzeText } from '@/services/analysis/pipeline';
 import {
-  mockAuthenticity,
+  mockImageReading,
+  mockImageReadingNoClaim,
   mockContradictingEvidence,
   mockModelContradicted,
   mockModelUnverifiable,
-  mockOcr,
+  testImage,
   mockProviders,
 } from '@/test/fixtures';
 
@@ -47,10 +48,9 @@ describe('ResultView', () => {
 
   it('renders evidence and image findings separately from the claim verdict', async () => {
     const result = await analyzeImage(
-      { uri: 'file://photo.jpg', base64: 'abc' },
+      testImage,
       mockProviders({
-        vision: mockAuthenticity,
-        ocr: mockOcr,
+        vision: mockImageReading,
         model: mockModelContradicted,
         evidence: mockContradictingEvidence,
       }),
@@ -58,19 +58,29 @@ describe('ResultView', () => {
     await render(<ResultView result={result} />);
 
     expect(screen.getByTestId('dimension-claim')).toBeTruthy();
-    expect(screen.getByTestId('dimension-authenticity')).toBeTruthy();
-    expect(screen.getByText('[mock] Inconsistent hands', { exact: false })).toBeTruthy();
+    expect(screen.getByTestId('dimension-authenticity')).toHaveTextContent(/Not assessed/);
+    expect(screen.getByTestId('image-origin')).toBeTruthy();
     expect(screen.getByText(mockContradictingEvidence[0].title)).toBeTruthy();
-    expect(screen.queryByText('Partial analysis')).toBeNull();
   });
 });
 
 describe('dimension wording', () => {
   it('keeps "AI-generated", "false" and "cannot verify" as distinct statements', async () => {
-    const image = await analyzeImage(
-      { uri: 'file://photo.jpg', base64: 'abc' },
-      mockProviders({ vision: mockAuthenticity, ocr: { text: '', confidence: 0, engine: 'm' } }),
+    const noClaim = await analyzeImage(
+      testImage,
+      mockProviders({ vision: mockImageReadingNoClaim }),
     );
+    // Authenticity wording, for when an authenticity model provides findings.
+    const image = {
+      ...noClaim,
+      authenticity: {
+        aiGeneration: { likelihood: 'high' as const, signals: ['[mock] Inconsistent hands'] },
+        manipulation: { likelihood: 'low' as const, signals: [] },
+        misleadingContext: { likelihood: 'undetermined' as const, signals: [] },
+        description: '[mock] A crowd scene.',
+        model: 'mock-vision',
+      },
+    };
     const falseClaim = await analyzeText(
       COFFEE,
       'text',

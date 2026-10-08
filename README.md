@@ -11,6 +11,8 @@ Built iOS-first with Expo (SDK 57), React Native, Expo Router and TypeScript. AI
 web source checking use Claude via the Anthropic API, called only from the backend.
 
 ```
+image ──► /api/v1/images/analyze ──► Claude vision: visible text + up to 3 claims (grounded)
+                                  └─► primary claim continues below, like a typed claim
 iOS app ──► /api/v1/claims/analyze ──► Claude: what is claimed, knowledge-based assessment
         ──► /api/v1/evidence/search ──► Claude web search ──► sources (provider citations)
                                     ──► Claude evaluates the claim against those sources
@@ -101,6 +103,17 @@ src/
 If source checking fails, the result is an AI-only assessment, clearly marked as not
 source-verified, and it can never be _Likely reliable_ or _Likely false_.
 
+### Images
+
+Choose a screenshot, social post, meme, chart or infographic (JPEG, PNG, WebP or GIF, up to
+5 MB; the format is detected from the file's bytes and checked again on the server). Claude
+vision transcribes the visible text (never guessing unreadable parts) and extracts up to 3
+separate claims. A claim is only checked if it is factual, complete, and its quote really
+appears in the image. The main claim then goes through exactly the same claim and source pipeline
+as typed text; other claims can be checked with one tap. Unreadable images and images without
+a checkable claim are _Cannot verify_. Images are processed in memory for one request, never
+stored or logged, and not kept in history. Details are in ARCHITECTURE.md → Image claim analysis.
+
 ### Principles in the code
 
 - **Separate questions stay separate.** Claim support, image authenticity and evidence
@@ -115,15 +128,17 @@ source-verified, and it can never be _Likely reliable_ or _Likely false_.
 
 ### Backend API
 
-| Endpoint                       | Request                           | Response                                                                                                                                                                                                                                                  |
-| ------------------------------ | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /api/v1/claims/analyze`  | `{ text, mode: "text"\|"claim" }` | `{ extractedClaim, claimType, verifiable, verifiabilityNote, stance, confidence, reasoning, indicators[], evidenceNeeded[], limitations, model }`                                                                                                         |
-| `POST /api/v1/evidence/search` | `{ claim, claimType }`            | `{ sources: [{ id, title, url, domain, excerpt, relationship, relevance, explanation, publishedAt? }], evaluation: { verdict, confidence, whatSourcesSay, inference, uncertainty, missingEvidence[], searchQueries[], model } \| null, rejectedSources }` |
+| Endpoint                       | Request                                                    | Response                                                                                                                                                                                                                                                  |
+| ------------------------------ | ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /api/v1/claims/analyze`  | `{ text, mode: "text"\|"claim" }`                          | `{ extractedClaim, claimType, verifiable, verifiabilityNote, stance, confidence, reasoning, indicators[], evidenceNeeded[], limitations, model }`                                                                                                         |
+| `POST /api/v1/images/analyze`  | `{ image: base64, mediaType }` (≤ 5 MB, JPEG/PNG/WebP/GIF) | `{ imageKind, description, visibleText, readability, claims: [{ text, claimType, isFactual, readability, context, quote, grounded, checkable }], primaryClaimIndex, containsInstructions, uncertainty, model }`                                           |
+| `POST /api/v1/evidence/search` | `{ claim, claimType }`                                     | `{ sources: [{ id, title, url, domain, excerpt, relationship, relevance, explanation, publishedAt? }], evaluation: { verdict, confidence, whatSourcesSay, inference, uncertainty, missingEvidence[], searchQueries[], model } \| null, rejectedSources }` |
 
 Errors use `{ error: { code, message } }` with `code` in `invalid_request` (400),
 `not_configured` (503), `rate_limited` (429), `model_refused` (422), `model_unavailable` (502),
 `invalid_model_output` (502), `timeout` (504), `search_unavailable` (503), `evaluation_failed`
-(502) or `internal` (500).
+(502), `empty_image` (400), `unsupported_image` (415), `image_too_large` (413), `invalid_image`
+(400) or `internal` (500).
 
 ## Roadmap
 
@@ -131,6 +146,7 @@ Errors use `{ error: { code, message } }` with `code` in `invalid_request` (400)
 2. **AI claim analysis (done):** secure backend route, structured Claude analysis, guard rails.
 3. **Source discovery and source-backed verification (done):** Claude web search, citation-only
    sources, structured evaluation, guard rails, Sources UI.
-4. **Image analysis:** vision model for AI-generation/manipulation signals, plus OCR feeding
-   extracted claims into verification.
+4. **Image claim analysis (done):** Claude vision reads images, extracts grounded claims, and
+   sends the main claim through the same verification pipeline. (Detecting AI-generated or edited
+   images is not implemented.)
 5. **Hardening:** end-to-end failure-mode testing and polish.

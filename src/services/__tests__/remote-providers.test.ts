@@ -1,7 +1,12 @@
 import { ServiceRequestError, ServiceUnavailableError, ValidationError } from '@/core/errors';
+import { validateImageInput } from '@/core/validation';
 
 import { postJson } from '../http/api-client';
-import { createRemoteProviders, parseClaimAnalysis, parseImageAnalysis } from '../providers/remote';
+import {
+  createRemoteProviders,
+  parseClaimAnalysis,
+  parseImageClaimAnalysis,
+} from '../providers/remote';
 
 function jsonResponse(body: unknown, status = 200) {
   return Promise.resolve(
@@ -131,15 +136,13 @@ describe('remote claim analyzer', () => {
 
 describe('other remote providers', () => {
   it('rejects malformed image analyses', () => {
-    expect(() => parseImageAnalysis({ aiGeneration: { likelihood: 'high' }, model: 'x' })).toThrow(
+    expect(() => parseImageClaimAnalysis({ imageKind: 'selfie', model: 'x' })).toThrow(
       ServiceRequestError,
     );
   });
 
-  it('refuses to send an image without data', async () => {
-    const providers = createRemoteProviders('https://api.test', 1000, jest.fn() as typeof fetch);
-    await expect(providers.visionAnalyzer.analyzeImage({ uri: 'file://a.jpg' })).rejects.toThrow(
-      /could not be read/,
-    );
+  it('refuses to send an image without data', () => {
+    // Validation runs before any upload; an image without bytes never reaches the provider.
+    expect(() => validateImageInput({ uri: 'file://a.jpg' })).toThrow(/could not be read/);
   });
 });

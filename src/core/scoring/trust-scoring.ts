@@ -63,7 +63,12 @@ export interface ScoringInput {
   authenticity: ImageAuthenticityAnalysis | null;
   /** Model evaluation of the claim against retrieved sources, already guarded. */
   sourceEvaluation?: SourceEvaluation | null;
+  /** The claim came from an image whose text could only be partly read. */
+  interpretationUncertain?: boolean;
 }
+
+/** Confidence multiplier when an image's text could only be partly read. */
+export const IMAGE_UNCERTAINTY_FACTOR = 0.75;
 
 const SOURCE_VERDICT_VALUE: Record<SourceVerdict, number | null> = {
   supported: 0.88,
@@ -263,6 +268,7 @@ export function computeConfidence(input: ScoringInput, factors: TrustFactor[]): 
     confidence = Math.min(confidence, evaluation.confidence);
     if (knowledgeConflict(input)) confidence *= 0.6;
   }
+  if (input.interpretationUncertain) confidence *= IMAGE_UNCERTAINTY_FACTOR;
   return Number(clamp01(confidence).toFixed(2));
 }
 

@@ -10,7 +10,7 @@ import { createUnavailableProviders } from './unavailable';
 export const capabilities = {
   claimAnalysis: true,
   evidenceSearch: true,
-  imageAnalysis: false,
+  imageAnalysis: true,
 } as const;
 
 export function createProviders(): AnalysisProviders {
@@ -19,6 +19,7 @@ export function createProviders(): AnalysisProviders {
     config.requestTimeoutMs,
     undefined,
     config.evidenceTimeoutMs,
+    config.imageTimeoutMs,
   );
   const unavailable = createUnavailableProviders();
   return {
@@ -27,7 +28,6 @@ export function createProviders(): AnalysisProviders {
       ? remote.evidenceRetriever
       : unavailable.evidenceRetriever,
     visionAnalyzer: capabilities.imageAnalysis ? remote.visionAnalyzer : unavailable.visionAnalyzer,
-    ocr: capabilities.imageAnalysis ? remote.ocr : unavailable.ocr,
   };
 }
 

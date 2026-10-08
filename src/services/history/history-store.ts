@@ -19,6 +19,14 @@ function isResult(value: unknown): value is AnalysisResult {
   );
 }
 
+/**
+ * Images are never written to storage: only the in-memory copy of a result keeps
+ * the picker's image URI, so the preview disappears when the app restarts.
+ */
+function withoutImage(item: AnalysisResult): AnalysisResult {
+  return item.input.imageUri ? { ...item, input: { ...item.input, imageUri: undefined } } : item;
+}
+
 export async function loadHistory(): Promise<AnalysisResult[]> {
   if (cache) return cache;
   try {
@@ -36,7 +44,7 @@ async function persist(items: AnalysisResult[]): Promise<void> {
   cache = items;
   listeners.forEach((listener) => listener(items));
   try {
-    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(items.map(withoutImage)));
   } catch {
     // Keep the in-memory copy; history is a convenience, not critical data.
   }

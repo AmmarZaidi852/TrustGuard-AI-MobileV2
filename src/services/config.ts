@@ -15,4 +15,6 @@ export const config = {
   requestTimeoutMs: 60_000,
   /** Web search plus source evaluation: two provider calls of up to 90 s each server-side. */
   evidenceTimeoutMs: 150_000,
+  /** Uploading an image (up to 5 MB) plus a vision call. */
+  imageTimeoutMs: 90_000,
 } as const;

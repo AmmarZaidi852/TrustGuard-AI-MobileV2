@@ -1,12 +1,8 @@
 import { ValidationError } from './errors';
+import { type SupportedImageType, checkImagePayload } from './image/image-payload';
 
 export const TEXT_LIMITS = { min: 12, max: 5000 } as const;
 export const CLAIM_LIMITS = { min: 8, max: 500 } as const;
-export const IMAGE_LIMITS = {
-  maxBytes: 10 * 1024 * 1024,
-  mimeTypes: ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'],
-} as const;
-
 export function normalizeWhitespace(input: string): string {
   return input
     .replace(/\r\n?/g, '\n')
@@ -42,25 +38,40 @@ export function validateTextInput(raw: string, mode: 'text' | 'claim'): string {
 export interface ImageInput {
   uri: string;
   mimeType?: string | null;
+  fileName?: string | null;
   fileSize?: number | null;
   width?: number;
   height?: number;
-  /** Base64 image data, required to send the image to the analysis backend. */
+  /** Base64 image data (or a base64 data URI on web); required to analyze the image. */
   base64?: string | null;
 }
 
-export function validateImageInput(image: ImageInput | null | undefined): ImageInput {
+export interface ValidatedImage extends ImageInput {
+  /** Base64 without any data-URI prefix. */
+  base64: string;
+  /** Detected from the bytes, not from metadata. */
+  mediaType: SupportedImageType;
+  bytes: number;
+}
+
+/**
+ * Validates an image before upload: present, a supported format detected from its
+ * bytes, within the size limit, and not damaged. Throws {@link ValidationError}.
+ * The server repeats these checks independently.
+ */
+export function validateImageInput(image: ImageInput | null | undefined): ValidatedImage {
   if (!image?.uri) {
     throw new ValidationError('Select an image to analyze.');
   }
-  const mime = image.mimeType?.toLowerCase();
-  if (mime && !(IMAGE_LIMITS.mimeTypes as readonly string[]).includes(mime)) {
-    throw new ValidationError(
-      'This file type is not supported. Use a JPEG, PNG, WebP or HEIC image.',
-    );
+  const data = image.base64 ?? (image.uri.startsWith('data:') ? image.uri : null);
+  if (!data) {
+    throw new ValidationError('The image data could not be read. Try selecting the image again.');
   }
-  if (image.fileSize && image.fileSize > IMAGE_LIMITS.maxBytes) {
-    throw new ValidationError('The image is larger than 10 MB. Choose a smaller image.');
-  }
-  return image;
+  const check = checkImagePayload({
+    base64: data,
+    declaredType: image.mimeType,
+    fileName: image.fileName,
+  });
+  if (!check.ok) throw new ValidationError(check.message);
+  return { ...image, base64: check.base64, mediaType: check.mediaType, bytes: check.bytes };
 }

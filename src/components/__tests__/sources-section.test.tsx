@@ -76,7 +76,7 @@ describe('Sources section', () => {
     await render(<EvidenceList result={result} />);
     const link = screen.getByTestId('source-link-evidence-0');
     expect(link.props.accessibilityRole).toBe('link');
-    fireEvent.press(link);
+    await fireEvent.press(link);
     expect(openURL).toHaveBeenCalledWith(mockContradictingEvidence[0].url);
   });
 

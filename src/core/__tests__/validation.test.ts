@@ -1,4 +1,6 @@
 import { ValidationError } from '../errors';
+import { IMAGE_BYTES } from '@/test/fixtures';
+
 import { normalizeWhitespace, validateImageInput, validateTextInput } from '../validation';
 
 describe('validateTextInput', () => {
@@ -29,17 +31,23 @@ describe('validateImageInput', () => {
   it('requires an image', () => {
     expect(() => validateImageInput(null)).toThrow('Select an image');
   });
-  it('rejects unsupported types and oversized files', () => {
-    expect(() => validateImageInput({ uri: 'file://a.gif', mimeType: 'image/gif' })).toThrow(
-      'not supported',
-    );
-    expect(() => validateImageInput({ uri: 'file://a.jpg', fileSize: 11 * 1024 * 1024 })).toThrow(
-      '10 MB',
-    );
+  it('rejects unsupported types (by content) and oversized images', () => {
+    expect(() =>
+      validateImageInput({ uri: 'file://a.pdf', mimeType: 'image/png', base64: IMAGE_BYTES.pdf }),
+    ).toThrow('not supported');
+    const big = 'A'.repeat(Math.ceil(((6 * 1024 * 1024) / 3) * 4));
+    expect(() =>
+      validateImageInput({ uri: 'file://a.jpg', base64: IMAGE_BYTES.jpeg.slice(0, 8) + big }),
+    ).toThrow('5 MB');
   });
-  it('accepts a normal image', () => {
-    const image = { uri: 'file://a.png', mimeType: 'image/png', fileSize: 2000 };
-    expect(validateImageInput(image)).toBe(image);
+  it('accepts a normal image and reports the type detected from its bytes', () => {
+    const image = {
+      uri: 'file://a.png',
+      mimeType: 'image/png',
+      fileSize: 2000,
+      base64: IMAGE_BYTES.png,
+    };
+    expect(validateImageInput(image)).toMatchObject({ ...image, mediaType: 'image/png' });
   });
 });
 

@@ -1,4 +1,11 @@
-import type { ClaimType, ModelClaimAnalysis, SourceEvaluation, SourceRelevance } from './types';
+import type { SupportedImageType } from './image/image-payload';
+import type {
+  ImageClaimAnalysis,
+  ClaimType,
+  ModelClaimAnalysis,
+  SourceEvaluation,
+  SourceRelevance,
+} from './types';
 
 /** Wire contract between the app and the TrustGuardAI backend. Shared by both sides. */
 
@@ -6,8 +13,17 @@ export const API_ROUTES = {
   claimAnalysis: '/api/v1/claims/analyze',
   evidenceSearch: '/api/v1/evidence/search',
   imageAnalysis: '/api/v1/images/analyze',
-  ocr: '/api/v1/images/ocr',
 } as const;
+
+/** Image claim extraction. The image is used for this request only and never stored. */
+export interface ImageAnalysisRequest {
+  /** Base64 image bytes (no data-URI prefix). */
+  image: string;
+  /** The type the app detected from the bytes; the server re-detects and must agree. */
+  mediaType: SupportedImageType;
+}
+
+export type ImageAnalysisResponse = ImageClaimAnalysis;
 
 export interface ClaimAnalysisRequest {
   text: string;
@@ -59,6 +75,10 @@ export type ApiErrorCode =
   | 'timeout'
   | 'search_unavailable'
   | 'evaluation_failed'
+  | 'empty_image'
+  | 'unsupported_image'
+  | 'image_too_large'
+  | 'invalid_image'
   | 'internal';
 
 export interface ApiErrorBody {

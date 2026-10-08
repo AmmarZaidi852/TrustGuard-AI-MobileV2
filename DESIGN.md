@@ -42,11 +42,32 @@ Ordered by the questions a user asks:
 8. **Recommended next step**, then a collapsible "How this assessment was made" (factor values,
    weights and which checks ran).
 
+## Image analysis
+
+- **Input:** choose an image from the library, see it at its own aspect ratio (capped height),
+  then **Replace** or **Remove** it (44 pt controls). Unsupported, damaged or oversized images
+  are explained immediately after picking and **Analyze** stays disabled. A short card explains
+  what happens: up to 3 claims read, the main one checked against sources, jokes and opinions
+  not treated as facts, no judgement of whether the image is AI-generated, and the image not
+  stored.
+- **Progress:** three steps: reading the image → assessing the main claim → checking sources.
+- **Result:** an "Analyzed from an image" header (thumbnail in the current session, otherwise a
+  "not stored" placeholder; image type; readability), then the normal hierarchy (claim, verdict,
+  confidence, separate questions), a "Claims in the image" card (each claim with status, the
+  main claim marked "Checked below", others with **Check this claim**, plus what couldn't be
+  read), the transcribed text, findings (including a warning if the image contains instructions
+  aimed at AI), and the same Sources section as text.
+- If no claim can be checked, the result is _Cannot verify_ with a plain explanation, never a
+  verdict about truth.
+
 ## Interaction (iOS-first)
 
 - Native multiline input with a capped height, keyboard insets that adjust automatically,
   interactive dismissal, and a dismiss on submit.
 - 44 pt minimum touch targets for secondary actions.
+- The image picker needs no permission prompt on current iOS (system photo picker); the
+  `photosPermission` text is configured for older versions. Text and image entry are separate
+  screens, so the keyboard never overlaps image controls.
 - Progress is shown as two steps ("Identifying and assessing the claim" → "Searching the web and
   checking sources"), with an honest time estimate for source checking.
 - Errors name the cause (network, timeout, rate limit, model declined, search unavailable) and

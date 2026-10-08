@@ -37,7 +37,7 @@ export const COMPONENT_LABELS: Record<AnalysisComponent, string> = {
   llm_analysis: 'AI claim analysis',
   evidence_retrieval: 'Source search (web)',
   source_evaluation: 'Source evaluation',
-  vision_analysis: 'Image authenticity model',
+  vision_analysis: 'Image reading (AI vision)',
   ocr: 'Text in image (OCR)',
 };
 
@@ -102,9 +102,11 @@ export function describeAuthenticity(result: AnalysisResult): Dimension | null {
       key: 'authenticity',
       question,
       answer:
-        report?.status === 'failed'
-          ? 'The image authenticity check failed, so AI generation or editing was not assessed.'
-          : 'The image authenticity check is not connected, so AI generation or editing was not assessed.',
+        report?.status === 'completed'
+          ? 'Not assessed. TrustGuardAI reads the text and claims in the image; it does not judge whether the image itself is AI-generated or edited.'
+          : report?.status === 'failed'
+            ? 'The image authenticity check failed, so AI generation or editing was not assessed.'
+            : 'The image authenticity check is not connected, so AI generation or editing was not assessed.',
       tone: 'neutral',
     };
   }

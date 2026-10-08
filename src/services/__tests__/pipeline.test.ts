@@ -1,13 +1,14 @@
 import { AnalysisUnavailableError, ServiceRequestError, ValidationError } from '@/core/errors';
 import { createUnavailableProviders } from '@/services/providers/unavailable';
 import {
-  mockAuthenticity,
+  IMAGE_BYTES,
   mockContradictingEvidence,
+  mockImageReading,
+  mockImageReadingNoClaim,
   mockModelContradicted,
   mockModelOpinion,
   mockModelSupported,
   mockModelUnverifiable,
-  mockOcr,
   mockProviders,
   networkError,
 } from '@/test/fixtures';
@@ -17,7 +18,7 @@ import { analyzeImage, analyzeText } from '../analysis/pipeline';
 const COFFEE =
   'BREAKING: Scientists have confirmed that drinking coffee completely prevents cancer.';
 const options = { createId: () => 'id-1', now: () => new Date('2026-01-01T00:00:00Z') };
-const image = { uri: 'file://photo.jpg', mimeType: 'image/jpeg', base64: 'abc' };
+const image = { uri: 'file://photo.jpg', mimeType: 'image/jpeg', base64: IMAGE_BYTES.jpeg };
 
 type Result = Awaited<ReturnType<typeof analyzeText>>;
 const statusOf = (result: Result, component: string) =>
@@ -163,53 +164,47 @@ describe('analyzeText failure handling', () => {
 describe('analyzeImage', () => {
   it('refuses to produce a result when no image service is connected', async () => {
     await expect(analyzeImage(image, createUnavailableProviders())).rejects.toThrow(
-      /not connected/,
+      AnalysisUnavailableError,
     );
   });
 
-  it('surfaces failures when every image service fails', async () => {
-    await expect(
-      analyzeImage(image, mockProviders({ vision: networkError(), ocr: networkError() })),
-    ).rejects.toThrow(/Image analysis failed/);
+  it('surfaces vision failures instead of guessing from text', async () => {
+    await expect(analyzeImage(image, mockProviders({ vision: networkError() }))).rejects.toThrow(
+      /could not be analyzed.*Could not reach/,
+    );
   });
 
   it('validates the image', async () => {
     await expect(analyzeImage(null, createUnavailableProviders())).rejects.toThrow(ValidationError);
   });
 
-  it('assesses authenticity and sends text found in the image to AI claim analysis', async () => {
+  it('sends the claim read from the image through the normal claim pipeline', async () => {
     const result = await analyzeImage(
       image,
       mockProviders({
-        vision: mockAuthenticity,
-        ocr: mockOcr,
+        vision: mockImageReading,
         model: mockModelContradicted,
         evidence: mockContradictingEvidence,
       }),
     );
-    expect(result.authenticity).toEqual(mockAuthenticity);
-    expect(result.extractedText?.text).toBe(mockOcr.text);
+    expect(result.kind).toBe('image');
+    expect(result.imageAnalysis?.claims[0].checkable).toBe(true);
+    expect(result.extractedText?.text).toBe(mockImageReading.visibleText);
     expect(result.claim?.method).toBe('model');
-    expect(result.assessment.factors.map((f) => f.id)).toContain('ai_generation');
+    expect(statusOf(result, 'llm_analysis')).toBe('completed');
   });
 
-  it('keeps authenticity findings when AI claim analysis fails for the image text', async () => {
-    const result = await analyzeImage(
-      image,
-      mockProviders({ vision: mockAuthenticity, ocr: mockOcr, model: networkError() }),
-    );
-    expect(statusOf(result, 'llm_analysis')).toBe('failed');
-    expect(result.claim?.method).toBe('heuristic');
-    expect(result.authenticity).toEqual(mockAuthenticity);
+  it('fails clearly when claim analysis fails after the image was read', async () => {
+    await expect(
+      analyzeImage(image, mockProviders({ vision: mockImageReading, model: networkError() })),
+    ).rejects.toThrow(/A claim was read from the image, but AI claim analysis failed/);
   });
 
-  it('handles images without text: authenticity only, no claim', async () => {
-    const result = await analyzeImage(
-      image,
-      mockProviders({ vision: mockAuthenticity, ocr: { text: '', confidence: 0, engine: 'm' } }),
-    );
+  it('handles images without text: no claim, nothing verified', async () => {
+    const result = await analyzeImage(image, mockProviders({ vision: mockImageReadingNoClaim }));
     expect(result.claim).toBeNull();
     expect(statusOf(result, 'llm_analysis')).toBe('skipped');
-    expect(result.assessment.summary).toMatch(/No factual claim was found in this image/);
+    expect(result.assessment.label).toBe('cannot_verify');
+    expect(result.assessment.summary).toMatch(/No factual claim was found in the image/);
   });
 });

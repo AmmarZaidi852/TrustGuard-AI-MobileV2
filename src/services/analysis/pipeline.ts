@@ -6,7 +6,13 @@ import {
   extractSingleClaim,
   scoreSpecificity,
 } from '@/core/claims/claim-extraction';
-import { AnalysisUnavailableError, ServiceUnavailableError, toUserMessage } from '@/core/errors';
+import {
+  AnalysisUnavailableError,
+  ServiceUnavailableError,
+  ValidationError,
+  toUserMessage,
+} from '@/core/errors';
+import { guardImageAnalysis, primaryImageClaim } from '@/core/image/image-guards';
 import { assessTrust } from '@/core/scoring/trust-scoring';
 import { detectLanguageSignals } from '@/core/signals/language-signals';
 import { evaluateSource } from '@/core/sources/source-evaluation';
@@ -20,9 +26,11 @@ import type {
   ExtractedClaim,
   ImageAuthenticityAnalysis,
   Indicator,
+  ImageClaimAnalysis,
   ModelClaimAnalysis,
   OcrResult,
   SourceEvaluation,
+  TextReadability,
 } from '@/core/types';
 import { type ImageInput, validateImageInput, validateTextInput } from '@/core/validation';
 
@@ -39,7 +47,7 @@ import type { AnalysisProviders } from '../providers/types';
  */
 
 /** Coarse progress stages, for the loading UI. */
-export type AnalysisStage = 'analyzing_claim' | 'checking_sources';
+export type AnalysisStage = 'reading_image' | 'analyzing_claim' | 'checking_sources';
 
 export interface PipelineOptions {
   now?: () => Date;
@@ -300,6 +308,11 @@ function assemble(params: {
   extractedText: OcrResult | null;
   reports: ComponentReport[];
   options: PipelineOptions;
+  imageAnalysis?: ImageClaimAnalysis | null;
+  /** Parts of the image could not be read reliably; lowers confidence. */
+  interpretationUncertain?: boolean;
+  /** Why no claim from an image was checked. */
+  noClaimReason?: string;
 }): AnalysisResult {
   const { verification, authenticity, options } = params;
   const { claim } = verification;
@@ -313,13 +326,13 @@ function assemble(params: {
     evidenceStatus: verification.evidenceStatus,
     authenticity,
     sourceEvaluation: verification.sourceEvaluation,
+    interpretationUncertain: params.interpretationUncertain,
   });
 
-  if (params.kind === 'image' && !claim) {
-    assessment.summary =
-      'No factual claim was found in this image, so there was nothing to fact-check. See the image authenticity findings.';
+  if (params.kind === 'image' && params.noClaimReason) {
+    assessment.summary = `${params.noClaimReason} This says nothing about whether anything in the image is true or false.`;
     assessment.recommendation =
-      'Check where the image first appeared, for example with a reverse image search, before sharing.';
+      'If the image makes a claim you want checked, enter it with Analyze claim. Check where the image first appeared before sharing it.';
   }
 
   // Prefer what the source evaluation found missing, then the model's own list.
@@ -336,13 +349,21 @@ function assemble(params: {
     keyStatements: params.keyStatements,
     assessment,
     indicators,
-    reasoning: buildReasoning({ claim, indicators, verification, authenticity }),
+    reasoning: [
+      ...(params.interpretationUncertain
+        ? [
+            'Parts of the image could not be read reliably, so the claim may be incomplete and confidence was reduced.',
+          ]
+        : []),
+      ...buildReasoning({ claim, indicators, verification, authenticity }),
+    ],
     evidence: verification.evidence,
     evidenceStatus: verification.evidenceStatus,
     sourceEvaluation: verification.sourceEvaluation,
     evidenceNeeded: modelNeeded.length > 0 ? modelNeeded : describeEvidenceNeeded(claim),
     authenticity,
     extractedText: params.extractedText,
+    imageAnalysis: params.imageAnalysis ?? null,
     components: [...params.reports, ...verification.reports],
   };
 }
@@ -389,9 +410,35 @@ export async function analyzeText(
   });
 }
 
-/** Minimum OCR text needed before treating it as a potential claim. */
-const MIN_OCR_TEXT = 12;
+const READABILITY_CONFIDENCE: Record<TextReadability, number> = {
+  clear: 0.9,
+  partial: 0.6,
+  unreadable: 0.2,
+  no_text: 0,
+};
 
+function noClaimReason(reading: ImageClaimAnalysis): string {
+  if (reading.readability === 'unreadable') {
+    return 'The text in the image could not be read reliably, so no claim could be checked.';
+  }
+  if (reading.claims.length === 0) {
+    return 'No factual claim was found in the image.';
+  }
+  if (reading.claims.every((claim) => !claim.isFactual || !claim.grounded)) {
+    return reading.claims.some((claim) => !claim.grounded) &&
+      reading.claims.every((claim) => claim.isFactual)
+      ? 'The claims could not be matched to readable text in the image, so they were not checked.'
+      : 'The image contains commentary, opinion or humour rather than a checkable factual claim.';
+  }
+  return 'The claims in the image are opinions or predictions, which cannot be fact-checked.';
+}
+
+/**
+ * Image analysis: Claude vision reads the image and extracts its claims; the
+ * primary claim then goes through exactly the same pipeline as a typed claim
+ * (AI claim analysis → source discovery → source-backed evaluation → scoring).
+ * Vision failures are errors, never a text-only guess.
+ */
 export async function analyzeImage(
   rawImage: ImageInput | null | undefined,
   providers: AnalysisProviders,
@@ -399,58 +446,117 @@ export async function analyzeImage(
 ): Promise<AnalysisResult> {
   const image = validateImageInput(rawImage);
 
-  const [vision, ocr] = await Promise.all([
-    runStep('vision_analysis', () => providers.visionAnalyzer.analyzeImage(image)),
-    runStep('ocr', () => providers.ocr.extractText(image)),
-  ]);
-
-  if (!vision.value && !ocr.value) {
-    const allUnavailable = [vision, ocr].every((step) => step.report.status === 'unavailable');
+  options.onProgress?.('reading_image');
+  let reading: ImageClaimAnalysis;
+  try {
+    reading = guardImageAnalysis(await providers.visionAnalyzer.analyzeImage(image));
+  } catch (error) {
+    if (error instanceof ValidationError) throw error;
     throw new AnalysisUnavailableError(
-      allUnavailable
-        ? 'Image analysis is not connected yet, so this image cannot be analyzed. No result was generated.'
-        : `Image analysis failed: ${vision.report.detail ?? ocr.report.detail ?? 'unknown error'}`,
+      error instanceof ServiceUnavailableError
+        ? error.message
+        : `The image could not be analyzed. ${toUserMessage(error)}`,
     );
   }
 
-  const text = ocr.value?.text.trim() ?? '';
-  const hasText = text.length >= MIN_OCR_TEXT && text.split(/\s+/).length >= 3;
-  const extraction = hasText ? extractClaims(text) : { claim: null, keyStatements: [] };
-  const indicators = hasText ? detectLanguageSignals(text) : [];
-  const verification = await verifyContent(
-    hasText ? { text, mode: 'text' } : null,
-    extraction.claim,
-    providers,
-    options,
-  );
-
-  const reports: ComponentReport[] = [
-    vision.report,
-    ocr.report,
-    hasText
-      ? claimExtractionReport(verification.claim, 'from text in the image')
-      : skipped('claim_extraction', 'No readable text was found in the image.'),
-  ];
-  if (hasText) {
-    reports.push({
-      component: 'language_signals',
-      status: 'completed',
-      detail: 'On-device heuristic',
+  const primary = primaryImageClaim(reading);
+  const readable = reading.visibleText.replace(/\[illegible\]/gi, ' ').trim();
+  const indicators = readable.length >= 12 ? detectLanguageSignals(readable) : [];
+  if (reading.containsInstructions) {
+    indicators.push({
+      id: 'embedded_instructions',
+      label: 'Instructions embedded in the image',
+      description:
+        'The image contains text that tries to instruct an AI or the reader (for example "ignore previous instructions"). It was treated as data, not followed, and is a warning sign.',
+      direction: 'raises_concern',
+      weight: 0.35,
+      origin: 'model',
     });
+  }
+
+  const visionReport: ComponentReport = {
+    component: 'vision_analysis',
+    status: 'completed',
+    detail: `Read by ${reading.model}: text ${reading.readability.replace('_', ' ')}, ${plural(reading.claims.length, 'claim')} found`,
+  };
+
+  let verification: Verification;
+  if (primary) {
+    // Same safeguards as typed text: the claim is re-validated and re-analyzed.
+    verification = await verifyContent(
+      { text: primary.text, mode: 'claim' },
+      extractSingleClaim(primary.text),
+      providers,
+      options,
+    );
+    if (!verification.model) {
+      const report = verification.reports.find((r) => r.component === 'llm_analysis');
+      throw new AnalysisUnavailableError(
+        `A claim was read from the image, but AI claim analysis failed: ${report?.detail ?? 'unavailable'}`,
+      );
+    }
+  } else {
+    const reason = noClaimReason(reading);
+    const shown = reading.claims[0];
+    verification = {
+      claim: shown
+        ? {
+            text: shown.text,
+            type: shown.claimType,
+            checkable: false,
+            specificity: scoreSpecificity(shown.text),
+            method: 'model',
+          }
+        : null,
+      model: null,
+      evidence: [],
+      evidenceStatus: 'not_searched',
+      sourceEvaluation: null,
+      reports: [
+        skipped('llm_analysis', reason),
+        skipped('evidence_retrieval', reason),
+        skipped('source_evaluation', reason),
+      ],
+    };
   }
 
   return assemble({
     kind: 'image',
-    input: {
-      imageUri: image.uri.startsWith('blob:') ? undefined : image.uri,
-      text: text || undefined,
-    },
-    keyStatements: extraction.keyStatements,
+    input: { imageUri: image.uri, text: reading.visibleText || undefined },
+    keyStatements: reading.claims.map((claim) => claim.text),
     indicators,
     verification,
-    authenticity: vision.value,
-    extractedText: ocr.value,
-    reports,
+    authenticity: null,
+    extractedText: reading.visibleText
+      ? {
+          text: reading.visibleText,
+          confidence: READABILITY_CONFIDENCE[reading.readability],
+          engine: reading.model,
+        }
+      : null,
+    imageAnalysis: reading,
+    interpretationUncertain:
+      reading.readability === 'partial' || primary?.readability === 'partial',
+    noClaimReason: primary ? undefined : noClaimReason(reading),
+    reports: [
+      visionReport,
+      primary
+        ? {
+            component: 'claim_extraction',
+            status: 'completed',
+            detail: `AI vision (claim ${(reading.primaryClaimIndex ?? 0) + 1} of ${reading.claims.length} verified)`,
+          }
+        : skipped('claim_extraction', noClaimReason(reading)),
+      ...(indicators.length > 0 || readable.length >= 12
+        ? [
+            {
+              component: 'language_signals' as const,
+              status: 'completed' as const,
+              detail: 'On-device heuristic, on the text in the image',
+            },
+          ]
+        : []),
+    ],
     options,
   });
 }

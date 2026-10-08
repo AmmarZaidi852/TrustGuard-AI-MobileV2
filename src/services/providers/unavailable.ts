@@ -12,13 +12,10 @@ export function createUnavailableProviders(): AnalysisProviders {
       analyzeClaim: () => Promise.reject(new ServiceUnavailableError('AI claim analysis')),
     },
     evidenceRetriever: {
-      findEvidence: () => Promise.reject(new ServiceUnavailableError('Evidence search')),
+      findEvidence: () => Promise.reject(new ServiceUnavailableError('Source checking')),
     },
     visionAnalyzer: {
       analyzeImage: () => Promise.reject(new ServiceUnavailableError('Image analysis')),
-    },
-    ocr: {
-      extractText: () => Promise.reject(new ServiceUnavailableError('Text extraction (OCR)')),
     },
   };
 }

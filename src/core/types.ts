@@ -186,6 +186,56 @@ export interface OcrResult {
   engine: string;
 }
 
+export type ImageKind =
+  | 'social_post_screenshot'
+  | 'news_screenshot'
+  | 'meme'
+  | 'infographic'
+  | 'chart'
+  | 'photo_with_text'
+  | 'photo'
+  | 'document'
+  | 'other';
+
+/** How reliably the text in the image could be read. */
+export type TextReadability = 'clear' | 'partial' | 'unreadable' | 'no_text';
+
+export interface ImageClaim {
+  /** The claim restated as a standalone sentence. */
+  text: string;
+  claimType: ClaimType;
+  /** Presented as fact in the image (not a joke, caption, opinion or prediction). */
+  isFactual: boolean;
+  readability: 'clear' | 'partial';
+  /** Context visible in the image needed to understand the claim (who posted, date, chart labels). */
+  context: string;
+  /** The exact visible text the claim is based on, from the transcription. */
+  quote: string;
+  /** Set by the guard rails: the quote really appears in the transcribed text. */
+  grounded: boolean;
+  /** Set by the guard rails: factual, grounded and checkable. */
+  checkable: boolean;
+}
+
+/** Claude vision reading of an image: what it shows, its text and the claims in it. */
+export interface ImageClaimAnalysis {
+  imageKind: ImageKind;
+  /** Short neutral description of what the image shows. */
+  description: string;
+  /** Transcription of visible text; unreadable parts are marked [illegible]. */
+  visibleText: string;
+  readability: TextReadability;
+  /** At most `MAX_IMAGE_CLAIMS`, in the order they appear. */
+  claims: ImageClaim[];
+  /** Index of the claim that is verified, or `null` when no claim is checkable. */
+  primaryClaimIndex: number | null;
+  /** The image contains text that tries to instruct an AI/reader (treated as a warning sign). */
+  containsInstructions: boolean;
+  /** What could not be interpreted reliably. */
+  uncertainty: string;
+  model: string;
+}
+
 export type AnalysisComponent =
   | 'claim_extraction'
   | 'language_signals'
@@ -255,5 +305,7 @@ export interface AnalysisResult {
   evidenceNeeded: string[];
   authenticity: ImageAuthenticityAnalysis | null;
   extractedText: OcrResult | null;
+  /** How the image was read (image analyses only). The image itself is never stored. */
+  imageAnalysis?: ImageClaimAnalysis | null;
   components: ComponentReport[];
 }

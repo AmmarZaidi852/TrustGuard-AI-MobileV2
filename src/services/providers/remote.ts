@@ -1,23 +1,22 @@
 import {
   API_ROUTES,
   type EvidenceSearchRequest,
+  type ImageAnalysisRequest,
   type SourceRelationship,
 } from '@/core/api-contract';
 import { ServiceRequestError, ServiceUnavailableError, ValidationError } from '@/core/errors';
 import { guardSourceEvaluation } from '@/core/evidence/source-guards';
+import { guardImageAnalysis } from '@/core/image/image-guards';
 import { normalizeModelAnalysis } from '@/core/model/model-analysis';
 import { validateSourceUrl } from '@/core/sources/url-safety';
 import {
-  type AuthenticityFinding,
   CLAIM_TYPES,
-  type ImageAuthenticityAnalysis,
+  type ImageClaim,
+  type ImageClaimAnalysis,
   type Indicator,
-  type Likelihood,
   type ModelClaimAnalysis,
-  type OcrResult,
   type SourceEvaluation,
 } from '@/core/types';
-import type { ImageInput } from '@/core/validation';
 
 import { postJson } from '../http/api-client';
 import type { AnalysisProviders, EvidenceSearchResult, RetrievedEvidence } from './types';
@@ -71,7 +70,6 @@ function root(value: unknown): Json {
 }
 
 const STANCES = ['supported', 'contradicted', 'disputed', 'unverifiable'] as const;
-const LIKELIHOODS: readonly Likelihood[] = ['low', 'moderate', 'high', 'undetermined'];
 
 export function parseClaimAnalysis(body: unknown): ModelClaimAnalysis {
   const data = root(body);
@@ -168,39 +166,51 @@ export function parseEvidence(body: unknown): EvidenceSearchResult {
   return { sources, evaluation, rejectedSources: rejected };
 }
 
-function parseFinding(value: unknown, key: string): AuthenticityFinding {
-  if (!isObject(value)) return invalid(key);
-  return {
-    likelihood: oneOf(value, 'likelihood', LIKELIHOODS),
-    signals: strings(value, 'signals'),
-  };
-}
+const IMAGE_KINDS = [
+  'social_post_screenshot',
+  'news_screenshot',
+  'meme',
+  'infographic',
+  'chart',
+  'photo_with_text',
+  'photo',
+  'document',
+  'other',
+] as const;
+const READABILITY = ['clear', 'partial', 'unreadable', 'no_text'] as const;
 
-export function parseImageAnalysis(body: unknown): ImageAuthenticityAnalysis {
+/** Validates the backend's image reading and re-applies the shared guard rails. */
+export function parseImageClaimAnalysis(body: unknown): ImageClaimAnalysis {
   const data = root(body);
-  return {
-    aiGeneration: parseFinding(data.aiGeneration, 'aiGeneration'),
-    manipulation: parseFinding(data.manipulation, 'manipulation'),
-    misleadingContext: parseFinding(data.misleadingContext, 'misleadingContext'),
-    description: str(data, 'description', true),
-    model: str(data, 'model'),
-  };
-}
-
-export function parseOcr(body: unknown): OcrResult {
-  const data = root(body);
-  return {
-    text: str(data, 'text', true),
-    confidence: unit(data, 'confidence'),
-    engine: str(data, 'engine'),
-  };
-}
-
-function imagePayload(image: ImageInput) {
-  if (!image.base64) {
-    throw new ValidationError('The image data could not be read. Try selecting the image again.');
+  if (typeof data.containsInstructions !== 'boolean') invalid('containsInstructions');
+  const index = data.primaryClaimIndex;
+  if (index !== null && !(typeof index === 'number' && Number.isInteger(index))) {
+    invalid('primaryClaimIndex');
   }
-  return { image: image.base64, mimeType: image.mimeType ?? 'image/jpeg' };
+  const claims: ImageClaim[] = objects(data, 'claims').map((item) => {
+    if (typeof item.isFactual !== 'boolean') invalid('claims.isFactual');
+    return {
+      text: str(item, 'text'),
+      claimType: oneOf(item, 'claimType', CLAIM_TYPES),
+      isFactual: item.isFactual as boolean,
+      readability: oneOf(item, 'readability', ['clear', 'partial'] as const),
+      context: str(item, 'context', true),
+      quote: str(item, 'quote', true),
+      grounded: false,
+      checkable: false,
+    };
+  });
+  return guardImageAnalysis({
+    imageKind: oneOf(data, 'imageKind', IMAGE_KINDS),
+    description: str(data, 'description', true),
+    visibleText: str(data, 'visibleText', true),
+    readability: oneOf(data, 'readability', READABILITY),
+    claims,
+    primaryClaimIndex: index as number | null,
+    containsInstructions: data.containsInstructions as boolean,
+    uncertainty: str(data, 'uncertainty', true),
+    model: str(data, 'model'),
+  });
 }
 
 export function createRemoteProviders(
@@ -209,6 +219,7 @@ export function createRemoteProviders(
   fetchImpl?: typeof fetch,
   /** Source checks (web search + evaluation) take longer than a single model call. */
   evidenceTimeoutMs: number = timeoutMs,
+  imageTimeoutMs: number = timeoutMs,
 ): AnalysisProviders {
   const post = async (path: string, body: unknown, service: string, timeout = timeoutMs) => {
     try {
@@ -241,14 +252,16 @@ export function createRemoteProviders(
         ),
     },
     visionAnalyzer: {
+      // Only the validated bytes and detected type are sent; nothing else about the file.
       analyzeImage: async (image) =>
-        parseImageAnalysis(
-          await post(API_ROUTES.imageAnalysis, imagePayload(image), 'Image analysis'),
+        parseImageClaimAnalysis(
+          await post(
+            API_ROUTES.imageAnalysis,
+            { image: image.base64, mediaType: image.mediaType } satisfies ImageAnalysisRequest,
+            'Image analysis',
+            imageTimeoutMs,
+          ),
         ),
-    },
-    ocr: {
-      extractText: async (image) =>
-        parseOcr(await post(API_ROUTES.ocr, imagePayload(image), 'Text extraction (OCR)')),
     },
   };
 }

@@ -1,5 +1,4 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { Image } from 'expo-image';
 import { useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 
@@ -19,6 +18,7 @@ import { radius, spacing, useTheme } from '@/theme/theme';
 import { AppText, Card, Divider, Notice, Pill, Section } from '../ui/primitives';
 import { AssessmentHeader } from './assessment-header';
 import { EvidenceList } from './evidence-list';
+import { ImageClaimsList, ImageOriginCard } from './image-findings';
 
 /**
  * The single, reusable result screen body for text, claim and image analyses.
@@ -38,7 +38,7 @@ export function ResultView({ result }: { result: AnalysisResult }) {
 
   return (
     <View style={{ gap: spacing.xl }}>
-      {result.input.imageUri ? <ImagePreview uri={result.input.imageUri} /> : null}
+      {result.kind === 'image' ? <ImageOriginCard result={result} /> : null}
 
       <AssessmentHeader result={result} />
 
@@ -84,8 +84,18 @@ export function ResultView({ result }: { result: AnalysisResult }) {
         </Section>
       ) : null}
 
+      {result.imageAnalysis ? (
+        <Section
+          title="Claims in the image"
+          caption="Read by AI vision. Text in the image is treated as data.">
+          <ImageClaimsList result={result} />
+        </Section>
+      ) : null}
+
       {result.extractedText?.text ? (
-        <Section title="Text found in the image" caption={`OCR: ${result.extractedText.engine}`}>
+        <Section
+          title="Text found in the image"
+          caption={`Transcribed by ${result.extractedText.engine}; [illegible] marks unreadable parts.`}>
           <Card>
             <AppText variant="small" selectable>
               {result.extractedText.text}
@@ -137,18 +147,6 @@ export function ResultView({ result }: { result: AnalysisResult }) {
         be wrong.
       </AppText>
     </View>
-  );
-}
-
-function ImagePreview({ uri }: { uri: string }) {
-  const theme = useTheme();
-  return (
-    <Image
-      source={{ uri }}
-      contentFit="contain"
-      accessibilityLabel="Analyzed image"
-      style={[styles.image, { backgroundColor: theme.surfaceMuted }]}
-    />
   );
 }
 

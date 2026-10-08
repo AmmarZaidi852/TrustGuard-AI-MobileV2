@@ -73,6 +73,10 @@ export function toUserMessage(error: unknown): string {
           case 'evaluation_failed':
             return 'Sources were found, but the AI could not evaluate them reliably.';
           case 'invalid_request':
+          case 'empty_image':
+          case 'unsupported_image':
+          case 'image_too_large':
+          case 'invalid_image':
             return error.message;
           default:
             return `The analysis service returned an error${error.status ? ` (${error.status})` : ''}.`;

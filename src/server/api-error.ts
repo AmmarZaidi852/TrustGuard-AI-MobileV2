@@ -23,6 +23,10 @@ export const STATUS_BY_CODE: Record<ApiErrorCode, number> = {
   timeout: 504,
   search_unavailable: 503,
   evaluation_failed: 502,
+  empty_image: 400,
+  unsupported_image: 415,
+  image_too_large: 413,
+  invalid_image: 400,
   internal: 500,
 };
 
