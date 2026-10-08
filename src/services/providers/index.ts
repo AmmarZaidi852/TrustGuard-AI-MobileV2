@@ -9,12 +9,17 @@ import { createUnavailableProviders } from './unavailable';
  */
 export const capabilities = {
   claimAnalysis: true,
-  evidenceSearch: false,
+  evidenceSearch: true,
   imageAnalysis: false,
 } as const;
 
 export function createProviders(): AnalysisProviders {
-  const remote = createRemoteProviders(config.apiBaseUrl, config.requestTimeoutMs);
+  const remote = createRemoteProviders(
+    config.apiBaseUrl,
+    config.requestTimeoutMs,
+    undefined,
+    config.evidenceTimeoutMs,
+  );
   const unavailable = createUnavailableProviders();
   return {
     claimAnalyzer: capabilities.claimAnalysis ? remote.claimAnalyzer : unavailable.claimAnalyzer,

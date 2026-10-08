@@ -1,20 +1,26 @@
-import { API_ROUTES } from '@/core/api-contract';
+import {
+  API_ROUTES,
+  type EvidenceSearchRequest,
+  type SourceRelationship,
+} from '@/core/api-contract';
 import { ServiceRequestError, ServiceUnavailableError, ValidationError } from '@/core/errors';
+import { guardSourceEvaluation } from '@/core/evidence/source-guards';
 import { normalizeModelAnalysis } from '@/core/model/model-analysis';
+import { validateSourceUrl } from '@/core/sources/url-safety';
 import {
   type AuthenticityFinding,
   CLAIM_TYPES,
-  type EvidenceStance,
   type ImageAuthenticityAnalysis,
   type Indicator,
   type Likelihood,
   type ModelClaimAnalysis,
   type OcrResult,
+  type SourceEvaluation,
 } from '@/core/types';
 import type { ImageInput } from '@/core/validation';
 
 import { postJson } from '../http/api-client';
-import type { AnalysisProviders, RetrievedEvidence } from './types';
+import type { AnalysisProviders, EvidenceSearchResult, RetrievedEvidence } from './types';
 
 /**
  * Providers backed by the TrustGuardAI backend proxy, which holds all API keys.
@@ -65,12 +71,6 @@ function root(value: unknown): Json {
 }
 
 const STANCES = ['supported', 'contradicted', 'disputed', 'unverifiable'] as const;
-const EVIDENCE_STANCES: readonly EvidenceStance[] = [
-  'supports',
-  'contradicts',
-  'mixed',
-  'unrelated',
-];
 const LIKELIHOODS: readonly Likelihood[] = ['low', 'moderate', 'high', 'undetermined'];
 
 export function parseClaimAnalysis(body: unknown): ModelClaimAnalysis {
@@ -100,15 +100,72 @@ export function parseClaimAnalysis(body: unknown): ModelClaimAnalysis {
   });
 }
 
-export function parseEvidence(body: unknown): RetrievedEvidence[] {
-  return objects(root(body), 'results').map((item) => ({
-    title: str(item, 'title'),
-    url: str(item, 'url'),
-    publisher: str(item, 'publisher', true),
-    snippet: str(item, 'snippet', true),
-    stance: oneOf(item, 'stance', EVIDENCE_STANCES),
-    publishedAt: str(item, 'publishedAt', true) || undefined,
-  }));
+const RELATIONSHIPS = ['supports', 'contradicts', 'context'] as const;
+const RELEVANCES = ['high', 'medium', 'low'] as const;
+const SOURCE_VERDICTS = [
+  'supported',
+  'contradicted',
+  'mixed',
+  'insufficient_evidence',
+  'cannot_verify',
+] as const;
+
+function parseSource(item: Json): RetrievedEvidence | null {
+  // Individual bad sources are dropped rather than failing the whole check.
+  const url = validateSourceUrl(item.url);
+  if (!url || typeof item.title !== 'string' || !item.title.trim()) return null;
+  if (!RELATIONSHIPS.includes(item.relationship as never)) return null;
+  if (!RELEVANCES.includes(item.relevance as never)) return null;
+  return {
+    title: item.title.trim(),
+    url,
+    publisher: typeof item.domain === 'string' ? item.domain : '',
+    snippet: typeof item.excerpt === 'string' ? item.excerpt : '',
+    stance: item.relationship as RetrievedEvidence['stance'],
+    relevance: item.relevance as RetrievedEvidence['relevance'],
+    explanation: typeof item.explanation === 'string' ? item.explanation : '',
+    publishedAt: typeof item.publishedAt === 'string' ? item.publishedAt : undefined,
+  };
+}
+
+function parseSourceEvaluation(value: unknown, sources: RetrievedEvidence[]): SourceEvaluation {
+  const data = root(value);
+  const evaluation: SourceEvaluation = {
+    verdict: oneOf(data, 'verdict', SOURCE_VERDICTS),
+    confidence: unit(data, 'confidence'),
+    whatSourcesSay: str(data, 'whatSourcesSay', true),
+    inference: str(data, 'inference', true),
+    uncertainty: str(data, 'uncertainty', true),
+    missingEvidence: strings(data, 'missingEvidence'),
+    searchQueries: strings(data, 'searchQueries'),
+    model: str(data, 'model'),
+  };
+  // Re-apply the shared guard rails to what actually arrived.
+  return guardSourceEvaluation(
+    evaluation,
+    sources.map((source) => ({
+      url: source.url,
+      relationship: source.stance as SourceRelationship,
+      relevance: source.relevance ?? 'low',
+    })),
+  );
+}
+
+export function parseEvidence(body: unknown): EvidenceSearchResult {
+  const data = root(body);
+  const items = objects(data, 'sources');
+  const sources: RetrievedEvidence[] = [];
+  let rejected = typeof data.rejectedSources === 'number' ? data.rejectedSources : 0;
+  for (const item of items) {
+    const source = parseSource(item);
+    if (source) sources.push(source);
+    else rejected += 1;
+  }
+  const evaluation =
+    data.evaluation === null || data.evaluation === undefined || sources.length === 0
+      ? null
+      : parseSourceEvaluation(data.evaluation, sources);
+  return { sources, evaluation, rejectedSources: rejected };
 }
 
 function parseFinding(value: unknown, key: string): AuthenticityFinding {
@@ -150,10 +207,12 @@ export function createRemoteProviders(
   baseUrl: string,
   timeoutMs: number,
   fetchImpl?: typeof fetch,
+  /** Source checks (web search + evaluation) take longer than a single model call. */
+  evidenceTimeoutMs: number = timeoutMs,
 ): AnalysisProviders {
-  const post = async (path: string, body: unknown, service: string) => {
+  const post = async (path: string, body: unknown, service: string, timeout = timeoutMs) => {
     try {
-      return await postJson(`${baseUrl}${path}`, body, { timeoutMs, fetchImpl });
+      return await postJson(`${baseUrl}${path}`, body, { timeoutMs: timeout, fetchImpl });
     } catch (error) {
       if (error instanceof ServiceRequestError && error.code === 'not_configured') {
         throw new ServiceUnavailableError(service, `${service} is not set up on the server yet.`);
@@ -173,7 +232,12 @@ export function createRemoteProviders(
     evidenceRetriever: {
       findEvidence: async (claim) =>
         parseEvidence(
-          await post(API_ROUTES.evidenceSearch, { claim: claim.text }, 'Evidence search'),
+          await post(
+            API_ROUTES.evidenceSearch,
+            { claim: claim.text, claimType: claim.type } satisfies EvidenceSearchRequest,
+            'Source checking',
+            evidenceTimeoutMs,
+          ),
         ),
     },
     visionAnalyzer: {

@@ -40,7 +40,7 @@ describe('ResultView', () => {
     expect(screen.getByText('[mock] Overstates a modest association')).toBeTruthy();
     expect(screen.getByText('Reported by AI model')).toBeTruthy();
     expect(screen.getByText('Partial analysis')).toBeTruthy();
-    expect(screen.getByTestId('evidence-status')).toHaveTextContent(/not connected/);
+    expect(screen.getByText('Sources not checked')).toBeTruthy();
     // No image dimension for text analyses.
     expect(screen.queryByTestId('dimension-authenticity')).toBeNull();
   });
@@ -92,7 +92,7 @@ describe('dimension wording', () => {
     expect(describeClaimVerification(unverified).answer).toBe(
       'The claim cannot currently be verified.',
     );
-    expect(describeEvidence(unverified).answer).toMatch(/not connected/);
+    expect(describeEvidence(unverified).answer).toMatch(/not checked/);
   });
 });
 

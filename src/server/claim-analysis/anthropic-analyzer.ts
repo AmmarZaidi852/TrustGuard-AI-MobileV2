@@ -4,6 +4,7 @@ import { betaZodOutputFormat } from '@anthropic-ai/sdk/helpers/beta/zod';
 import type { ClaimAnalysisRequest } from '@/core/api-contract';
 import type { ModelClaimAnalysis } from '@/core/types';
 
+import { mapAnthropicError } from '../api-error';
 import { ClaimAnalysisError } from './errors';
 import { CLAIM_ANALYSIS_SYSTEM_PROMPT, buildClaimAnalysisUserMessage } from './prompt';
 import { ClaimAnalysisOutputSchema, toModelClaimAnalysis } from './schema';
@@ -47,7 +48,7 @@ export function createAnthropicClaimAnalyzer({
         ],
       });
     } catch (error) {
-      throw mapSdkError(error);
+      throw mapAnthropicError(error);
     }
 
     if (response.stop_reason === 'refusal') {
@@ -64,40 +65,4 @@ export function createAnthropicClaimAnalyzer({
     }
     return toModelClaimAnalysis(response.parsed_output, response.model);
   };
-}
-
-function mapSdkError(error: unknown): ClaimAnalysisError {
-  if (
-    error instanceof Anthropic.AuthenticationError ||
-    error instanceof Anthropic.PermissionDeniedError
-  ) {
-    return new ClaimAnalysisError(
-      'not_configured',
-      'The AI provider rejected the server credentials.',
-    );
-  }
-  if (error instanceof Anthropic.RateLimitError) {
-    return new ClaimAnalysisError(
-      'rate_limited',
-      'The AI provider is busy. Try again in a minute.',
-    );
-  }
-  if (error instanceof Anthropic.BadRequestError) {
-    return new ClaimAnalysisError('model_unavailable', 'The AI provider rejected the request.');
-  }
-  if (error instanceof Anthropic.APIConnectionError) {
-    // Includes timeouts (APIConnectionTimeoutError extends APIConnectionError).
-    return new ClaimAnalysisError('model_unavailable', 'Could not reach the AI provider.');
-  }
-  if (error instanceof Anthropic.APIError) {
-    return new ClaimAnalysisError('model_unavailable', 'The AI provider returned an error.');
-  }
-  if (error instanceof Anthropic.AnthropicError) {
-    // The SDK could not parse the model output against the schema.
-    return new ClaimAnalysisError(
-      'invalid_model_output',
-      'The AI model returned a malformed analysis.',
-    );
-  }
-  return new ClaimAnalysisError('internal', 'Unexpected error while analyzing.');
 }

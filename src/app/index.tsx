@@ -76,12 +76,18 @@ export default function HomeScreen() {
         </AppText>
       </View>
 
-      {!capabilities.evidenceSearch ? (
-        <Notice tone="neutral" title="Source checking coming soon">
-          AI analysis is live, but it isn’t checked against independent sources yet. Until it is,
+      {capabilities.evidenceSearch ? (
+        <Notice tone="info" title="Checked against real sources" icon="library-outline">
+          Claims are checked against sources found on the web, which is stronger than an AI’s
+          opinion alone. It is still not a guarantee of truth: sources can be incomplete or wrong,
+          so open them and judge for yourself.
+        </Notice>
+      ) : (
+        <Notice tone="neutral" title="Source checking unavailable">
+          AI analysis is live, but claims are not checked against independent sources, so
           TrustGuardAI won’t mark a claim as “Likely reliable” or “Likely false”.
         </Notice>
-      ) : null}
+      )}
 
       <View style={{ gap: spacing.md }}>
         {OPTIONS.map((option) => (

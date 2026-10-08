@@ -120,7 +120,7 @@ export function ResultView({ result }: { result: AnalysisResult }) {
         </Card>
       </Section>
 
-      <Section title="Evidence">
+      <Section title="Sources" caption="Found by web search and judged by AI against the claim.">
         <EvidenceList result={result} />
       </Section>
 

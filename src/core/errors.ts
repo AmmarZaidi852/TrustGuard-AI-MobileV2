@@ -66,6 +66,12 @@ export function toUserMessage(error: unknown): string {
             return 'The AI service is temporarily unavailable. Please try again shortly.';
           case 'invalid_model_output':
             return 'The AI returned an incomplete analysis, so it was not used. Please try again.';
+          case 'timeout':
+            return 'The AI service took too long to respond. Please try again.';
+          case 'search_unavailable':
+            return 'Web search is unavailable right now, so no external sources could be checked.';
+          case 'evaluation_failed':
+            return 'Sources were found, but the AI could not evaluate them reliably.';
           case 'invalid_request':
             return error.message;
           default:

@@ -1,3 +1,4 @@
+import { RELEVANCE_WEIGHT } from '../evidence/source-guards';
 import { languageConcernIntensity } from '../signals/language-signals';
 import type {
   AssessmentLabel,
@@ -9,6 +10,8 @@ import type {
   Likelihood,
   ModelClaimAnalysis,
   RiskLevel,
+  SourceEvaluation,
+  SourceVerdict,
   TrustAssessment,
   TrustFactor,
 } from '../types';
@@ -21,12 +24,17 @@ import type {
  * when at least one verification signal (model analysis or evidence) exists —
  * language heuristics alone never produce a trust score.
  *
+ * When a source-backed evaluation exists (Phase 3), its verdict decides the label
+ * through explicit rules (see `chooseLabel`) and its guarded confidence caps the
+ * overall confidence. Without one, the Phase 2 rules apply unchanged.
+ *
  * The whole module is a pure function of its inputs so it can be swapped for a
  * model-based scorer without touching the pipeline or UI.
  */
 
 export const FACTOR_WEIGHTS = {
   model_assessment: 0.3,
+  source_backed_assessment: 0.3,
   evidence_balance: 0.3,
   /**
    * Credibility is not a direction on its own — a credible source can contradict a
@@ -53,6 +61,26 @@ export interface ScoringInput {
   evidence: EvidenceItem[];
   evidenceStatus: EvidenceStatus;
   authenticity: ImageAuthenticityAnalysis | null;
+  /** Model evaluation of the claim against retrieved sources, already guarded. */
+  sourceEvaluation?: SourceEvaluation | null;
+}
+
+const SOURCE_VERDICT_VALUE: Record<SourceVerdict, number | null> = {
+  supported: 0.88,
+  contradicted: 0.1,
+  mixed: 0.45,
+  insufficient_evidence: null,
+  cannot_verify: null,
+};
+
+/** Retrieved sources and the model's own knowledge point in opposite directions. */
+export function knowledgeConflict(input: ScoringInput): boolean {
+  const verdict = input.sourceEvaluation?.verdict;
+  const stance = input.model?.stance;
+  return (
+    (verdict === 'supported' && stance === 'contradicted') ||
+    (verdict === 'contradicted' && stance === 'supported')
+  );
 }
 
 const MODEL_STANCE_VALUE: Record<ModelClaimAnalysis['stance'], number> = {
@@ -82,7 +110,9 @@ export function evidenceBalance(evidence: EvidenceItem[]): number | null {
   let total = 0;
   let net = 0;
   for (const item of relevant) {
-    const weight = item.source.credibility;
+    // Weighted by outlet credibility and, when known, by relevance to the claim.
+    const weight =
+      item.source.credibility * (item.relevance ? RELEVANCE_WEIGHT[item.relevance] : 1);
     total += weight;
     if (item.stance === 'supports') net += weight;
     else if (item.stance === 'contradicts') net -= weight;
@@ -112,6 +142,21 @@ export function buildFactors(input: ScoringInput): TrustFactor[] {
       explanation: input.model
         ? `The model judged the claim "${input.model.stance}" with ${Math.round(input.model.confidence * 100)}% self-reported confidence.`
         : 'No AI model analysis was available.',
+    },
+    {
+      id: 'source_backed_assessment',
+      label: 'Source-backed AI evaluation',
+      value: (() => {
+        const evaluation = input.sourceEvaluation;
+        const base = evaluation ? SOURCE_VERDICT_VALUE[evaluation.verdict] : null;
+        return base === null || !evaluation
+          ? null
+          : clamp01(0.5 + (base - 0.5) * evaluation.confidence);
+      })(),
+      weight: FACTOR_WEIGHTS.source_backed_assessment,
+      explanation: input.sourceEvaluation
+        ? `Judged against the retrieved sources: "${input.sourceEvaluation.verdict.replace('_', ' ')}" with ${Math.round(input.sourceEvaluation.confidence * 100)}% confidence after evidence-strength limits.`
+        : 'The claim was not evaluated against external sources.',
     },
     {
       id: 'evidence_balance',
@@ -209,7 +254,16 @@ export function computeConfidence(input: ScoringInput, factors: TrustFactor[]): 
     0.2 * specificity;
 
   const hasVerificationSignal = input.model !== null || relevant.length > 0;
-  return Number(clamp01(hasVerificationSignal ? raw : Math.min(raw, 0.25)).toFixed(2));
+  let confidence = hasVerificationSignal ? raw : Math.min(raw, 0.25);
+
+  const evaluation = input.sourceEvaluation;
+  if (evaluation) {
+    // Never more confident than the guarded, evidence-strength-limited evaluation:
+    // finding sources only helps when they are relevant and credible.
+    confidence = Math.min(confidence, evaluation.confidence);
+    if (knowledgeConflict(input)) confidence *= 0.6;
+  }
+  return Number(clamp01(confidence).toFixed(2));
 }
 
 function riskFromScore(score: number | null, concern: number): RiskLevel {
@@ -228,6 +282,27 @@ export function chooseLabel(
   confidence: number,
 ): AssessmentLabel {
   if (input.claim && !input.claim.checkable) return 'cannot_verify';
+
+  const evaluation = input.sourceEvaluation;
+  // A search ran and found nothing usable: say so, whatever the model believes.
+  if (!evaluation && input.evidenceStatus === 'none_found') return 'insufficient_evidence';
+  if (evaluation) {
+    const strong =
+      confidence >= THRESHOLDS.minConfidenceForStrongLabel && !knowledgeConflict(input);
+    switch (evaluation.verdict) {
+      case 'supported':
+        return strong ? 'likely_reliable' : 'needs_verification';
+      case 'contradicted':
+        if (knowledgeConflict(input)) return 'needs_verification';
+        return strong ? 'likely_false' : 'possibly_misleading';
+      case 'mixed':
+        return 'needs_verification';
+      case 'insufficient_evidence':
+        return 'insufficient_evidence';
+      case 'cannot_verify':
+        return 'cannot_verify';
+    }
+  }
 
   const relevant = relevantEvidence(input.evidence);
   if (!input.model && relevant.length === 0) {
@@ -306,6 +381,21 @@ const MODEL_ONLY_SUMMARIES: Record<ModelClaimAnalysis['stance'], string> = {
     'The AI model could not assess this claim from its own knowledge (for example, it may be too recent or too specific). That does not mean it is false.',
 };
 
+const SOURCE_BACKED_SUMMARIES: Record<AssessmentLabel, string> = {
+  likely_reliable:
+    'Credible sources found during this check support the claim. A source-backed check is stronger than AI knowledge alone, but it is not a guarantee.',
+  likely_false:
+    'Credible sources found during this check contradict the claim. A source-backed check is stronger than AI knowledge alone, but some uncertainty remains.',
+  possibly_misleading:
+    'Some sources contradict the claim, but the evidence found is limited or not authoritative enough to be conclusive.',
+  needs_verification:
+    'The sources found are mixed, only partly support the claim, or are not strong enough to rely on. It needs further verification.',
+  insufficient_evidence:
+    'Sources were searched, but none directly address this claim with reliable evidence. That does not mean it is false.',
+  cannot_verify:
+    'This claim cannot be checked against public sources (for example, it concerns private or unknowable information).',
+};
+
 function summarize(input: ScoringInput, label: AssessmentLabel): string {
   const { claim, model } = input;
   if (claim && !claim.checkable) {
@@ -317,8 +407,24 @@ function summarize(input: ScoringInput, label: AssessmentLabel): string {
     }
     return 'This statement cannot be fact-checked as written, for example because it is too vague.';
   }
+  if (input.sourceEvaluation) {
+    if (knowledgeConflict(input)) {
+      return 'The sources found and the AI model’s own knowledge point in different directions, so this needs further verification.';
+    }
+    if (input.sourceEvaluation.verdict === 'mixed') {
+      return 'The sources disagree, or the claim is only partly accurate. It needs further verification.';
+    }
+    return SOURCE_BACKED_SUMMARIES[label];
+  }
+  if (input.evidenceStatus === 'none_found' && model) {
+    return SOURCE_BACKED_SUMMARIES.insufficient_evidence;
+  }
   if (model && relevantEvidence(input.evidence).length === 0) {
-    return MODEL_ONLY_SUMMARIES[model.stance];
+    const prefix =
+      input.evidenceStatus === 'failed'
+        ? 'External source checking was unavailable, so this rests on the AI model’s own knowledge. '
+        : '';
+    return prefix + MODEL_ONLY_SUMMARIES[model.stance];
   }
   return SUMMARIES[label];
 }

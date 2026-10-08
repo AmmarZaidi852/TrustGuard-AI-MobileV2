@@ -194,6 +194,7 @@ describe('assessTrust', () => {
     const { factors } = assessTrust(base);
     expect(factors.map((f) => f.id)).toEqual([
       'model_assessment',
+      'source_backed_assessment',
       'evidence_balance',
       'source_credibility',
       'language_signals',

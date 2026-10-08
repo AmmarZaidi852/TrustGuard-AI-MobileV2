@@ -13,4 +13,6 @@ export const config = {
   apiBaseUrl: readApiBaseUrl(),
   /** AI analysis typically takes 5–30 s; allow for slow mobile networks. */
   requestTimeoutMs: 60_000,
+  /** Web search plus source evaluation: two provider calls of up to 90 s each server-side. */
+  evidenceTimeoutMs: 150_000,
 } as const;

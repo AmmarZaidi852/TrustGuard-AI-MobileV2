@@ -104,7 +104,8 @@ describe('Anthropic claim analyzer', () => {
       new Anthropic.APIConnectionError({ message: 'down' }),
       'model_unavailable',
     ],
-    ['timeout', new Anthropic.APIConnectionTimeoutError(), 'model_unavailable'],
+    // Timeouts got their own code in Phase 3 (previously folded into model_unavailable).
+    ['timeout', new Anthropic.APIConnectionTimeoutError(), 'timeout'],
     [
       'server error',
       new Anthropic.InternalServerError(500, {}, 'oops', new Headers()),

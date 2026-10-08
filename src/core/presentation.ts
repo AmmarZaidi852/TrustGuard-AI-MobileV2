@@ -35,7 +35,7 @@ export const COMPONENT_LABELS: Record<AnalysisComponent, string> = {
   claim_extraction: 'Claim extraction',
   language_signals: 'Language signals',
   llm_analysis: 'AI claim analysis',
-  evidence_retrieval: 'Evidence search',
+  evidence_retrieval: 'Source search (web)',
   source_evaluation: 'Source evaluation',
   vision_analysis: 'Image authenticity model',
   ocr: 'Text in image (OCR)',
@@ -128,30 +128,111 @@ export function describeAuthenticity(result: AnalysisResult): Dimension | null {
   return { key: 'authenticity', question, answer: answers[worst], tone: LIKELIHOOD_TONE[worst] };
 }
 
+export interface SourceFindings {
+  kind: 'supporting' | 'contradicting' | 'mixed' | 'insufficient' | 'unavailable' | 'not_needed';
+  title: string;
+  text: string;
+  tone: Tone;
+}
+
+/**
+ * One headline for the Sources section, so it is obvious whether the AI found
+ * supporting evidence, contradicting evidence, mixed evidence, or not enough.
+ */
+export function describeSourceFindings(result: AnalysisResult): SourceFindings {
+  const evaluation = result.sourceEvaluation;
+  const relevant = result.evidence.filter((item) => item.stance !== 'unrelated');
+
+  if (result.evidenceStatus === 'failed') {
+    const report = result.components.find((c) => c.component === 'evidence_retrieval');
+    return {
+      kind: 'unavailable',
+      title: 'Source checking unavailable',
+      text: `${report?.detail ?? 'External sources could not be checked.'} The assessment relies on the AI model’s own knowledge and is not source-verified.`,
+      tone: 'caution',
+    };
+  }
+  if (result.evidenceStatus === 'not_searched') {
+    return result.claim?.checkable
+      ? {
+          kind: 'unavailable',
+          title: 'Sources not checked',
+          text: 'External sources were not checked for this analysis.',
+          tone: 'neutral',
+        }
+      : {
+          kind: 'not_needed',
+          title: 'No source check needed',
+          text: 'Opinions and predictions cannot be checked against sources.',
+          tone: 'neutral',
+        };
+  }
+  if (result.evidenceStatus === 'none_found' || relevant.length === 0) {
+    return {
+      kind: 'insufficient',
+      title: 'Not enough reliable sources',
+      text: 'A web search found no usable sources about this claim. That does not mean it is false.',
+      tone: 'neutral',
+    };
+  }
+  switch (evaluation?.verdict) {
+    case 'supported':
+      return {
+        kind: 'supporting',
+        title: 'Supporting evidence found',
+        text: 'The sources below directly support the claim.',
+        tone: 'positive',
+      };
+    case 'contradicted':
+      return {
+        kind: 'contradicting',
+        title: 'Contradicting evidence found',
+        text: 'The sources below directly contradict the claim or show it is overstated.',
+        tone: 'negative',
+      };
+    case 'mixed':
+      return {
+        kind: 'mixed',
+        title: 'Sources are mixed',
+        text: 'The sources disagree, or only partly support the claim.',
+        tone: 'caution',
+      };
+    default:
+      return {
+        kind: 'insufficient',
+        title: 'Not enough reliable evidence',
+        text: 'Sources were found, but they do not directly settle the claim.',
+        tone: 'neutral',
+      };
+  }
+}
+
 export function describeEvidence(result: AnalysisResult): Dimension {
   const question = 'What evidence is available?';
   const relevant = result.evidence.filter((item) => item.stance !== 'unrelated');
   switch (result.evidenceStatus) {
-    case 'found':
+    case 'found': {
+      const findings = describeSourceFindings(result);
       return {
         key: 'evidence',
         question,
-        answer: `${relevant.length} relevant source(s) found. See the Evidence section.`,
-        tone: 'info',
+        answer: `${relevant.length} source(s) found. ${findings.title}.`,
+        tone: findings.tone,
       };
+    }
     case 'none_found':
       return {
         key: 'evidence',
         question,
         answer:
-          'A search ran, but no relevant sources were found. This does not mean the claim is false.',
+          'A web search ran, but no usable sources were found. This does not mean the claim is false.',
         tone: 'neutral',
       };
     case 'failed':
       return {
         key: 'evidence',
         question,
-        answer: 'The evidence search failed, so no sources were checked.',
+        answer: 'External source checking was unavailable, so no sources were checked.',
         tone: 'caution',
       };
     case 'not_searched':
@@ -159,8 +240,8 @@ export function describeEvidence(result: AnalysisResult): Dimension {
         key: 'evidence',
         question,
         answer: result.claim?.checkable
-          ? 'Evidence search is not connected, so no sources were checked.'
-          : 'No evidence search was needed for this content.',
+          ? 'External sources were not checked for this analysis.'
+          : 'No source check was needed for this content.',
         tone: 'neutral',
       };
   }

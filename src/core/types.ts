@@ -75,21 +75,55 @@ export interface SourceAssessment {
   rationale: string;
 }
 
-export type EvidenceStance = 'supports' | 'contradicts' | 'mixed' | 'unrelated';
+/**
+ * How a source relates to the claim. `context` = relevant background that neither
+ * supports nor contradicts it. `mixed` is kept for older stored results.
+ */
+export type EvidenceStance = 'supports' | 'contradicts' | 'context' | 'mixed' | 'unrelated';
+
+export type SourceRelevance = 'high' | 'medium' | 'low';
 
 export interface EvidenceItem {
   id: string;
   title: string;
   url: string;
   publisher: string;
+  /** Text quoted from the source itself (provider citation), not written by the model. */
   snippet: string;
   stance: EvidenceStance;
+  /** Absent on results stored before source-backed verification existed. */
+  relevance?: SourceRelevance;
+  /** Short explanation of why the source is relevant to the claim. */
+  explanation?: string;
   publishedAt?: string;
   source: SourceAssessment;
 }
 
 /** Verification status of the evidence step, shown to the user as-is. */
 export type EvidenceStatus = 'found' | 'none_found' | 'not_searched' | 'failed';
+
+export type SourceVerdict =
+  'supported' | 'contradicted' | 'mixed' | 'insufficient_evidence' | 'cannot_verify';
+
+/**
+ * Source-backed evaluation of a claim: the model's reading of the retrieved
+ * sources, after code-level guard rails (see `core/evidence/source-guards.ts`).
+ */
+export interface SourceEvaluation {
+  verdict: SourceVerdict;
+  /** 0..1, capped like all model confidence. */
+  confidence: number;
+  /** What the sources actually state. */
+  whatSourcesSay: string;
+  /** What can reasonably be inferred from them about the claim. */
+  inference: string;
+  /** What remains uncertain or unaddressed. */
+  uncertainty: string;
+  missingEvidence: string[];
+  /** Search queries the model ran, for transparency. */
+  searchQueries: string[];
+  model: string;
+}
 
 /** Output of an LLM claim analysis (provided by the backend in a later phase). */
 export type ModelStance = 'supported' | 'contradicted' | 'disputed' | 'unverifiable';
@@ -171,6 +205,7 @@ export interface ComponentReport {
 
 export type TrustFactorId =
   | 'model_assessment'
+  | 'source_backed_assessment'
   | 'evidence_balance'
   | 'source_credibility'
   | 'language_signals'
@@ -215,6 +250,8 @@ export interface AnalysisResult {
   reasoning: string[];
   evidence: EvidenceItem[];
   evidenceStatus: EvidenceStatus;
+  /** Optional: results stored before source-backed verification do not have it. */
+  sourceEvaluation?: SourceEvaluation | null;
   evidenceNeeded: string[];
   authenticity: ImageAuthenticityAnalysis | null;
   extractedText: OcrResult | null;

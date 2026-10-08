@@ -4,8 +4,17 @@
  * imported by application code.
  */
 import { ServiceRequestError, ServiceUnavailableError } from '@/core/errors';
-import type { ImageAuthenticityAnalysis, ModelClaimAnalysis, OcrResult } from '@/core/types';
-import type { AnalysisProviders, RetrievedEvidence } from '@/services/providers/types';
+import type {
+  ImageAuthenticityAnalysis,
+  ModelClaimAnalysis,
+  OcrResult,
+  SourceEvaluation,
+} from '@/core/types';
+import type {
+  AnalysisProviders,
+  EvidenceSearchResult,
+  RetrievedEvidence,
+} from '@/services/providers/types';
 import { createUnavailableProviders } from '@/services/providers/unavailable';
 
 export const mockModelContradicted: ModelClaimAnalysis = {
@@ -67,6 +76,8 @@ export const mockContradictingEvidence: RetrievedEvidence[] = [
     publisher: 'National Cancer Institute',
     snippet: '[mock] No evidence that coffee prevents cancer.',
     stance: 'contradicts',
+    relevance: 'high',
+    explanation: '[mock] Directly addresses whether coffee prevents cancer.',
   },
   {
     title: '[mock] Fact check: coffee does not prevent cancer',
@@ -74,6 +85,8 @@ export const mockContradictingEvidence: RetrievedEvidence[] = [
     publisher: 'Full Fact',
     snippet: '[mock] Claim is false.',
     stance: 'contradicts',
+    relevance: 'high',
+    explanation: '[mock] Fact-check of this exact claim.',
   },
   {
     title: '[mock] Viral post',
@@ -81,6 +94,8 @@ export const mockContradictingEvidence: RetrievedEvidence[] = [
     publisher: '',
     snippet: '[mock] Coffee cures cancer!',
     stance: 'supports',
+    relevance: 'medium',
+    explanation: '[mock] Repeats the claim without evidence.',
   },
 ];
 
@@ -89,22 +104,28 @@ export const mockSupportingEvidence: RetrievedEvidence[] = [
     title: '[mock] A',
     url: 'https://apnews.com/a',
     publisher: 'AP',
-    snippet: '',
+    snippet: '[mock] Confirms the claim.',
     stance: 'supports',
+    relevance: 'high',
+    explanation: '[mock] Reports the claimed fact directly.',
   },
   {
     title: '[mock] B',
     url: 'https://www.reuters.com/b',
     publisher: 'Reuters',
-    snippet: '',
+    snippet: '[mock] Confirms the claim.',
     stance: 'supports',
+    relevance: 'high',
+    explanation: '[mock] Reports the claimed fact directly.',
   },
   {
     title: '[mock] C',
     url: 'https://www.nasa.gov/c',
     publisher: 'NASA',
-    snippet: '',
+    snippet: '[mock] Confirms the claim.',
     stance: 'supports',
+    relevance: 'high',
+    explanation: '[mock] Reports the claimed fact directly.',
   },
 ];
 
@@ -125,9 +146,45 @@ export const mockOcr: OcrResult = {
   engine: 'mock-ocr',
 };
 
+export const mockEvaluationContradicted: SourceEvaluation = {
+  verdict: 'contradicted',
+  confidence: 0.85,
+  whatSourcesSay: '[mock] Health agencies say there is no evidence coffee prevents cancer.',
+  inference: '[mock] The claim of complete prevention is not supported.',
+  uncertainty: '[mock] Some studies show modest associations for specific cancers.',
+  missingEvidence: ['[mock] Randomised trials on coffee and cancer incidence'],
+  searchQueries: ['coffee prevents cancer'],
+  model: 'mock-model',
+};
+
+export const mockEvaluationSupported: SourceEvaluation = {
+  ...mockEvaluationContradicted,
+  verdict: 'supported',
+  whatSourcesSay: '[mock] Several outlets report the event.',
+  inference: '[mock] The claim appears accurate.',
+  uncertainty: '[mock] Exact figures may change.',
+};
+
+export const mockEvaluationMixed: SourceEvaluation = {
+  ...mockEvaluationContradicted,
+  verdict: 'mixed',
+  confidence: 0.4,
+  whatSourcesSay: '[mock] Sources disagree.',
+};
+
+/** Shorthand for a source-search result in tests. */
+export function sourceSearch(
+  sources: RetrievedEvidence[],
+  evaluation: SourceEvaluation | null = null,
+  rejectedSources = 0,
+): EvidenceSearchResult {
+  return { sources, evaluation, rejectedSources };
+}
+
 export function mockProviders(overrides: {
   model?: ModelClaimAnalysis | Error;
-  evidence?: RetrievedEvidence[] | Error;
+  /** A bare array is wrapped as a search result without an evaluation. */
+  evidence?: EvidenceSearchResult | RetrievedEvidence[] | Error;
   vision?: ImageAuthenticityAnalysis | Error;
   ocr?: OcrResult | Error;
 }): AnalysisProviders {
@@ -145,7 +202,10 @@ export function mockProviders(overrides: {
     },
     evidenceRetriever: {
       findEvidence: (claim) =>
-        respond(overrides.evidence, () => base.evidenceRetriever.findEvidence(claim)),
+        respond(
+          Array.isArray(overrides.evidence) ? sourceSearch(overrides.evidence) : overrides.evidence,
+          () => base.evidenceRetriever.findEvidence(claim),
+        ),
     },
     visionAnalyzer: {
       analyzeImage: (img) => respond(overrides.vision, () => base.visionAnalyzer.analyzeImage(img)),

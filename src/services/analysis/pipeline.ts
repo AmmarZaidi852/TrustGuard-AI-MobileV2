@@ -22,6 +22,7 @@ import type {
   Indicator,
   ModelClaimAnalysis,
   OcrResult,
+  SourceEvaluation,
 } from '@/core/types';
 import { type ImageInput, validateImageInput, validateTextInput } from '@/core/validation';
 
@@ -37,9 +38,13 @@ import type { AnalysisProviders } from '../providers/types';
  * results are never invented to fill the gap.
  */
 
+/** Coarse progress stages, for the loading UI. */
+export type AnalysisStage = 'analyzing_claim' | 'checking_sources';
+
 export interface PipelineOptions {
   now?: () => Date;
   createId?: () => string;
+  onProgress?: (stage: AnalysisStage) => void;
 }
 
 const defaultId = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -63,6 +68,8 @@ async function runStep<T>(
   }
 }
 
+const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? '' : 's'}`;
+
 const skipped = (component: AnalysisComponent, detail: string): ComponentReport => ({
   component,
   status: 'skipped',
@@ -74,6 +81,7 @@ interface Verification {
   model: ModelClaimAnalysis | null;
   evidence: EvidenceItem[];
   evidenceStatus: EvidenceStatus;
+  sourceEvaluation: SourceEvaluation | null;
   reports: ComponentReport[];
 }
 
@@ -101,7 +109,9 @@ async function verifyContent(
   content: ClaimAnalysisRequest | null,
   heuristicClaim: ExtractedClaim | null,
   providers: AnalysisProviders,
+  options: PipelineOptions = {},
 ): Promise<Verification> {
+  if (content) options.onProgress?.('analyzing_claim');
   const modelStep = content
     ? await runStep('llm_analysis', () => providers.claimAnalyzer.analyzeClaim(content))
     : null;
@@ -122,6 +132,7 @@ async function verifyContent(
       model,
       evidence: [],
       evidenceStatus: 'not_searched',
+      sourceEvaluation: null,
       reports: [
         modelReport,
         skipped('evidence_retrieval', reason),
@@ -130,11 +141,13 @@ async function verifyContent(
     };
   }
 
+  options.onProgress?.('checking_sources');
   const retrieved = await runStep('evidence_retrieval', () =>
     providers.evidenceRetriever.findEvidence(claim),
   );
+  const sourceEvaluation = retrieved.value?.evaluation ?? null;
 
-  const evidence: EvidenceItem[] = (retrieved.value ?? []).map((item, index) => ({
+  const evidence: EvidenceItem[] = (retrieved.value?.sources ?? []).map((item, index) => ({
     ...item,
     id: `evidence-${index}`,
     publisher: item.publisher || evaluateSource(item.url).domain,
@@ -152,15 +165,33 @@ async function verifyContent(
 
   const sourceReport: ComponentReport =
     evidence.length > 0
-      ? { component: 'source_evaluation', status: 'completed', detail: 'Heuristic, by outlet type' }
+      ? {
+          component: 'source_evaluation',
+          status: 'completed',
+          detail: sourceEvaluation
+            ? `AI judged ${evidence.length} source(s) against the claim (${sourceEvaluation.model}); outlet credibility rated by outlet type`
+            : 'Outlet credibility rated by outlet type',
+        }
       : skipped('source_evaluation', 'No sources to evaluate.');
+
+  const retrievalReport: ComponentReport =
+    retrieved.report.status === 'completed'
+      ? {
+          ...retrieved.report,
+          detail:
+            evidence.length === 0
+              ? 'Web search ran but found no usable sources.'
+              : `${evidence.length} source(s) found${retrieved.value?.rejectedSources ? `; ${retrieved.value.rejectedSources} rejected (invalid or unsafe links)` : ''}`,
+        }
+      : retrieved.report;
 
   return {
     claim,
     model,
     evidence,
     evidenceStatus,
-    reports: [modelReport, retrieved.report, sourceReport],
+    sourceEvaluation,
+    reports: [modelReport, retrievalReport, sourceReport],
   };
 }
 
@@ -227,16 +258,19 @@ function buildReasoning(params: {
       const relevant = verification.evidence.filter((item) => item.stance !== 'unrelated');
       const supports = relevant.filter((item) => item.stance === 'supports').length;
       const contradicts = relevant.filter((item) => item.stance === 'contradicts').length;
+      const context = relevant.length - supports - contradicts;
       lines.push(
-        `Of ${relevant.length} relevant source(s), ${supports} support and ${contradicts} contradict the claim.`,
+        `Of ${plural(relevant.length, 'source')} found, ${supports} ${supports === 1 ? 'supports' : 'support'} the claim, ${contradicts} ${contradicts === 1 ? 'contradicts' : 'contradict'} it and ${context} ${context === 1 ? 'provides' : 'provide'} context.`,
       );
       break;
     }
     case 'none_found':
-      lines.push('An evidence search ran but found no relevant sources.');
+      lines.push('A web search ran but found no usable sources about this claim.');
       break;
     case 'failed':
-      lines.push('The evidence search failed, so no sources could be checked.');
+      lines.push(
+        'External source checking failed, so the claim has not been checked against independent sources.',
+      );
       break;
     case 'not_searched':
       if (claim?.checkable) {
@@ -278,6 +312,7 @@ function assemble(params: {
     evidence: verification.evidence,
     evidenceStatus: verification.evidenceStatus,
     authenticity,
+    sourceEvaluation: verification.sourceEvaluation,
   });
 
   if (params.kind === 'image' && !claim) {
@@ -287,7 +322,10 @@ function assemble(params: {
       'Check where the image first appeared, for example with a reverse image search, before sharing.';
   }
 
-  const modelNeeded = verification.model?.evidenceNeeded ?? [];
+  // Prefer what the source evaluation found missing, then the model's own list.
+  const sourceNeeded = verification.sourceEvaluation?.missingEvidence ?? [];
+  const modelNeeded =
+    sourceNeeded.length > 0 ? sourceNeeded : (verification.model?.evidenceNeeded ?? []);
 
   return {
     id: (options.createId ?? defaultId)(),
@@ -301,6 +339,7 @@ function assemble(params: {
     reasoning: buildReasoning({ claim, indicators, verification, authenticity }),
     evidence: verification.evidence,
     evidenceStatus: verification.evidenceStatus,
+    sourceEvaluation: verification.sourceEvaluation,
     evidenceNeeded: modelNeeded.length > 0 ? modelNeeded : describeEvidenceNeeded(claim),
     authenticity,
     extractedText: params.extractedText,
@@ -325,7 +364,7 @@ export async function analyzeText(
       : extractClaims(text);
 
   const indicators = detectLanguageSignals(text);
-  const verification = await verifyContent({ text, mode }, extraction.claim, providers);
+  const verification = await verifyContent({ text, mode }, extraction.claim, providers, options);
 
   // AI analysis is the core of a text/claim check: if it did not run, show an error
   // the user can retry rather than a degraded result that looks like an assessment.
@@ -382,6 +421,7 @@ export async function analyzeImage(
     hasText ? { text, mode: 'text' } : null,
     extraction.claim,
     providers,
+    options,
   );
 
   const reports: ComponentReport[] = [

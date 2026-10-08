@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { Keyboard, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import Ionicons from '@expo/vector-icons/Ionicons';
+import { ActivityIndicator, Keyboard, Pressable, StyleSheet, TextInput, View } from 'react-native';
 
 import { CLAIM_LIMITS, TEXT_LIMITS } from '@/core/validation';
 import { useAnalysisRunner } from '@/hooks/use-analysis-runner';
-import { analyzeText } from '@/services/analysis/pipeline';
+import { type AnalysisStage, analyzeText } from '@/services/analysis/pipeline';
 import { radius, spacing, useIsDark, useTheme } from '@/theme/theme';
 
 import { AppText, Button, Notice, Screen } from '../ui/primitives';
@@ -29,19 +30,60 @@ const COPY = {
   },
 } as const;
 
+const STEPS = [
+  { stage: 'analyzing_claim', label: 'Identifying and assessing the claim' },
+  { stage: 'checking_sources', label: 'Searching the web and checking sources' },
+] as const;
+
+/** Step-by-step progress; source checking can take up to a couple of minutes. */
+function ProgressSteps({ stage }: { stage: AnalysisStage | null }) {
+  const theme = useTheme();
+  const current = STEPS.findIndex((step) => step.stage === stage);
+  return (
+    <View style={{ gap: spacing.sm }} accessibilityLiveRegion="polite" testID="analysis-progress">
+      {STEPS.map((step, index) => {
+        const done = current > index;
+        const active = current === index;
+        return (
+          <View key={step.stage} style={styles.step}>
+            {active ? (
+              <ActivityIndicator size="small" color={theme.accent} />
+            ) : (
+              <Ionicons
+                name={done ? 'checkmark-circle' : 'ellipse-outline'}
+                size={18}
+                color={done ? theme.tones.positive.fg : theme.textSubtle}
+              />
+            )}
+            <AppText
+              variant="small"
+              muted={!active}
+              style={active ? { fontWeight: '600' } : undefined}>
+              {step.label}
+            </AppText>
+          </View>
+        );
+      })}
+      <AppText variant="caption" subtle>
+        Checking sources usually takes 30–90 seconds.
+      </AppText>
+    </View>
+  );
+}
+
 /** Shared input screen for "Analyze text" and "Analyze claim". */
 export function TextAnalysisForm({ mode }: { mode: 'text' | 'claim' }) {
   const theme = useTheme();
   const isDark = useIsDark();
   const copy = COPY[mode];
   const [value, setValue] = useState('');
-  const { run, isRunning, error, reset } = useAnalysisRunner();
+  const { run, isRunning, stage, error, reset } = useAnalysisRunner();
 
   const tooLong = value.length > copy.limits.max;
 
   const submit = () => {
     Keyboard.dismiss();
-    run((providers) => analyzeText(value, mode, providers));
+    run((providers, onProgress) => analyzeText(value, mode, providers, { onProgress }));
   };
 
   return (
@@ -137,13 +179,7 @@ export function TextAnalysisForm({ mode }: { mode: 'text' | 'claim' }) {
       />
 
       {isRunning ? (
-        <AppText
-          variant="small"
-          muted
-          style={{ textAlign: 'center' }}
-          accessibilityLiveRegion="polite">
-          The AI is reading the content and assessing the claim. This usually takes 5–30 seconds.
-        </AppText>
+        <ProgressSteps stage={stage} />
       ) : (
         <AppText variant="caption" subtle>
           Results are an assessment of the available signals, not a final verdict on what is true.
@@ -164,4 +200,5 @@ const styles = StyleSheet.create({
   },
   meta: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   touchTarget: { minHeight: 44, minWidth: 44, justifyContent: 'center' },
+  step: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, minHeight: 24 },
 });
