@@ -18,7 +18,7 @@ facts go here; limitations are stated explicitly.
 | -------------------------------------------------------------------- | ----------- | --------- |
 | 1. Foundation: screens, domain model, scoring, heuristics, result UI | Done        | `24da1c1` |
 | 2. Real AI claim analysis via a secure backend route                 | Done        | `ed32179` |
-| 3. Source discovery and source-backed verification                   | Done        | see below |
+| 3. Source discovery and source-backed verification                   | Done        | `53f26ae` |
 | 4. Image analysis (vision + OCR feeding claims into verification)    | **Next**    | –         |
 | 5. Hardening                                                         | Not started | –         |
 
