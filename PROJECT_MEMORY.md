@@ -14,13 +14,13 @@ facts go here; limitations are stated explicitly.
 
 ## Phases
 
-| Phase                                                                | Status   | Commit      |
-| -------------------------------------------------------------------- | -------- | ----------- |
-| 1. Foundation: screens, domain model, scoring, heuristics, result UI | Done     | `24da1c1`   |
-| 2. Real AI claim analysis via a secure backend route                 | Done     | `ed32179`   |
-| 3. Source discovery and source-backed verification                   | Done     | `53f26ae`   |
-| 4. Image claim analysis (Claude vision → existing verification)      | Done     | PHASE4_HASH |
-| 5. Hardening                                                         | **Next** | –           |
+| Phase                                                                | Status   | Commit    |
+| -------------------------------------------------------------------- | -------- | --------- |
+| 1. Foundation: screens, domain model, scoring, heuristics, result UI | Done     | `24da1c1` |
+| 2. Real AI claim analysis via a secure backend route                 | Done     | `ed32179` |
+| 3. Source discovery and source-backed verification                   | Done     | `53f26ae` |
+| 4. Image claim analysis (Claude vision → existing verification)      | Done     | `cab1ce1` |
+| 5. Hardening                                                         | **Next** | –         |
 
 ## Phase 3: source discovery and claim checking (`53f26ae`, pushed to main)
 
@@ -75,7 +75,7 @@ clean.
   load. React handlers were attached and nothing overlaid the buttons, so this looks like a tool
   artifact, but it was not confirmed on a real device.
 
-## Phase 4: image claim analysis (PHASE4_HASH, pushed to main)
+## Phase 4: image claim analysis (`cab1ce1`, pushed to main)
 
 **Architecture:** image → validated in the app (format from magic bytes, ≤ 5 MB, base64
 integrity, non-image metadata rejected) → `POST /api/v1/images/analyze` with only
