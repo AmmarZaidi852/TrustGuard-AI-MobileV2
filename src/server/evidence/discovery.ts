@@ -5,6 +5,7 @@ import { evaluateSource, extractDomain } from '@/core/sources/source-evaluation'
 import { validateSourceUrl } from '@/core/sources/url-safety';
 
 import { ApiError, mapAnthropicError } from '../api-error';
+import { REQUEST_EXTRAS, type RequestExtras } from '../provider-client';
 import {
   BLOCKED_SEARCH_DOMAINS,
   DISCOVERY_SYSTEM_PROMPT,
@@ -188,10 +189,12 @@ export type SourceDiscoverer = (request: EvidenceSearchRequest) => Promise<Disco
 export function createSourceDiscoverer({
   client,
   model,
+  extras = REQUEST_EXTRAS.anthropic,
   now = () => new Date(),
 }: {
   client: CreateClient;
   model: string;
+  extras?: RequestExtras;
   now?: () => Date;
 }): SourceDiscoverer {
   return async (request) => {
@@ -209,8 +212,8 @@ export function createSourceDiscoverer({
           model,
           max_tokens: 8000,
           output_config: { effort: 'low' },
-          betas: ['server-side-fallback-2026-07-01'],
-          fallbacks: 'default',
+          // Provider-specific fields (fallback model, or OpenRouter routing).
+          ...extras,
           system: DISCOVERY_SYSTEM_PROMPT,
           tools: [
             {

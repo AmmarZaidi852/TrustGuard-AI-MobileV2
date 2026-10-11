@@ -5,7 +5,7 @@ import type { ClaimAnalysisRequest } from '@/core/api-contract';
 import type { ModelClaimAnalysis } from '@/core/types';
 
 import { mapAnthropicError } from '../api-error';
-import { createProviderClient } from '../provider-client';
+import { REQUEST_EXTRAS, type RequestExtras, createProviderClient } from '../provider-client';
 import { ClaimAnalysisError } from './errors';
 import { CLAIM_ANALYSIS_SYSTEM_PROMPT, buildClaimAnalysisUserMessage } from './prompt';
 import { ClaimAnalysisOutputSchema, toModelClaimAnalysis } from './schema';
@@ -19,13 +19,15 @@ export interface AnthropicAnalyzerOptions {
   apiKey: string;
   model: string;
   client?: ParseClient;
+  extras?: RequestExtras;
   now?: () => Date;
 }
 
 export function createAnthropicClaimAnalyzer({
   apiKey,
   model,
-  client = createProviderClient({ apiKey, timeout: 50_000 }),
+  client = createProviderClient({ provider: 'anthropic', apiKey }, { timeout: 50_000 }),
+  extras = REQUEST_EXTRAS.anthropic,
   now = () => new Date(),
 }: AnthropicAnalyzerOptions): ClaimAnalyzerFn {
   return async (request) => {
@@ -38,8 +40,8 @@ export function createAnthropicClaimAnalyzer({
         output_config: { effort: 'medium', format: betaZodOutputFormat(ClaimAnalysisOutputSchema) },
         // If a safety classifier declines (e.g. sensitive health claims), retry on a
         // fallback model inside the same call instead of failing outright.
-        betas: ['server-side-fallback-2026-07-01'],
-        fallbacks: 'default',
+        // Provider-specific fields (fallback model, or OpenRouter routing).
+        ...extras,
         system: CLAIM_ANALYSIS_SYSTEM_PROMPT,
         messages: [
           {

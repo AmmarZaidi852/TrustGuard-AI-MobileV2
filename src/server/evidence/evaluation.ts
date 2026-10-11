@@ -6,6 +6,7 @@ import { guardSourceEvaluation } from '@/core/evidence/source-guards';
 import type { ClaimType, SourceEvaluation } from '@/core/types';
 
 import { ApiError, mapAnthropicError } from '../api-error';
+import { REQUEST_EXTRAS, type RequestExtras } from '../provider-client';
 import type { CreateClient, DiscoveredSource } from './discovery';
 import { EVALUATION_SYSTEM_PROMPT, buildEvaluationUserMessage } from './prompts';
 import { clipText } from './untrusted';
@@ -98,10 +99,12 @@ export type SourceEvaluator = (input: {
 export function createSourceEvaluator({
   client,
   model,
+  extras = REQUEST_EXTRAS.anthropic,
   now = () => new Date(),
 }: {
   client: CreateClient;
   model: string;
+  extras?: RequestExtras;
   now?: () => Date;
 }): SourceEvaluator {
   return async ({ claim, claimType, sources, searchQueries }) => {
@@ -114,8 +117,8 @@ export function createSourceEvaluator({
           effort: 'medium',
           format: betaZodOutputFormat(SourceEvaluationOutputSchema),
         },
-        betas: ['server-side-fallback-2026-07-01'],
-        fallbacks: 'default',
+        // Provider-specific fields (fallback model, or OpenRouter routing).
+        ...extras,
         system: EVALUATION_SYSTEM_PROMPT,
         messages: [
           {
@@ -133,7 +136,15 @@ export function createSourceEvaluator({
       const mapped = mapAnthropicError(error);
       // A provider/credential failure is reported as such; anything else about the
       // evaluation step is "sources found but not evaluated".
-      if (['not_configured', 'rate_limited', 'provider_billing', 'timeout'].includes(mapped.code))
+      if (
+        [
+          'not_configured',
+          'rate_limited',
+          'provider_billing',
+          'content_blocked',
+          'timeout',
+        ].includes(mapped.code)
+      )
         throw mapped;
       throw new ApiError('evaluation_failed', mapped.message);
     }

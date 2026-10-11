@@ -9,8 +9,10 @@ facts go here; limitations are stated explicitly.
   build is used for verification on the Windows dev machine.
 - Compact MVP: no accounts, social features, notifications, dashboards or chat.
 - Never present uncertain AI judgements as fact; never fabricate results when a service fails.
-- Single AI provider: Anthropic Claude (`claude-opus-5-5`, overridable with
-  `TRUSTGUARD_CLAIM_MODEL`), called only from Expo API routes.
+- One model family: Claude, called only from Expo API routes, either through the Anthropic API
+  (`claude-opus-5-5`) or OpenRouter's Anthropic-compatible endpoint (`anthropic/claude-opus-5.5`,
+  routed only to Anthropic). Selected with `TRUSTGUARD_AI_PROVIDER`; model overridable with
+  `TRUSTGUARD_CLAIM_MODEL`. Keys come from the process environment only, never `.env` files.
 
 ## Phases
 
@@ -64,7 +66,8 @@ clean.
 
 - **Live provider behaviour.** No Anthropic API key is available on the dev machine, so the real
   web-search call, citation content, evaluation quality, latency and cost per check are untested.
-  Before relying on Phase 3, run a live check with a real key (`.env.local`).
+  Before relying on Phase 3, run a live check with a real key (set in the process environment;
+  _correction:_ never in `.env.local`).
 - Whether `web_search_20260209` with `blocked_domains` and server-side fallbacks is accepted by
   the live API for this account (web search may need enabling in the Console).
 - Native iOS behaviour (no Mac/iPhone available here): keyboard, safe areas, opening links in
@@ -198,12 +201,35 @@ pattern (`sk-ant-`, `sk-or-v1-`), key names, `x-api-key`, the Anthropic host or 
 config, prompts or `src/server` paths. The server bundle references the key name (control) but
 holds no key value.
 
-**OpenRouter compatibility (from OpenRouter's docs, not tested):** see the gate report. Open
-items: `fallbacks: 'default'` is not OpenRouter's format; `stop_reason: "refusal"` is not in
-OpenRouter's documented list (handled fail-closed); a 403 there can mean OpenRouter moderation,
-which the current mapping would show as a credential problem; whether `blocked_domains` and
-Anthropic-generated citations are passed through must be checked live; requests should be
-pinned to the Anthropic upstream.
+**Commit note:** the gate was first committed locally as `58a5b8e`. GitHub push protection
+(GH013) rejected it because two synthetic test keys looked like real OpenRouter keys. The commit
+was amended (fixtures built at runtime) to `fdd8bb0`, which differs only in that test file. The
+original is kept as the local tag `backup/58a5b8e-original`.
+
+### OpenRouter support (branch `phase5/openrouter-provider`)
+
+Implemented as described in ARCHITECTURE.md ("AI provider"): provider selection and key/model
+validation in `server/env.ts`, one shared client in `server/provider-client.ts` (OpenRouter's
+Anthropic-compatible endpoint, Bearer auth, `anthropic/claude-opus-5.5`, routing pinned to
+Anthropic with `require_parameters`), OpenRouter-aware error mapping (402 credits, 403
+moderation vs. permissions, 408, 429, 404/502/503 routing) and a new `content_blocked` code.
+The security-gate suite now runs every security test against both providers, plus provider
+selection, endpoint and error-mapping tests, and proxy-style citation shapes (`url_citation`
+annotations, stripped citations, URL-only citations, malformed search results): 184 tests.
+
+**No live call has been made.** Still unverified with the live provider:
+
+- whether OpenRouter passes Anthropic's `web_search_20260209` tool (with `max_uses` and
+  `blocked_domains`) through and returns Anthropic's `web_search_result_location` citations with
+  `cited_text` (if not, source checks fail closed as "search unavailable");
+- whether `output_config.format` (structured outputs) and `output_config.effort` are accepted with
+  `require_parameters: true` (if not, requests fail with 404/503 → "temporarily unavailable");
+- how refusals arrive (`stop_reason: "refusal"` is not in OpenRouter's documented list; anything
+  else fails closed as malformed output);
+- the exact 403 body for moderation and guardrail blocks, and how `anthropic-beta` headers are
+  treated;
+- Anthropic's in-call fallback for safety-classifier refusals is not used via OpenRouter, so
+  some sensitive health claims may be refused more often.
 
 ### Remaining Phase 5 work
 

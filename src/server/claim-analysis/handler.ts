@@ -55,7 +55,7 @@ export function createClaimAnalysisHandler({
     if (!analyzer) {
       return errorResponse(
         'not_configured',
-        'AI analysis is not configured on the server (no usable ANTHROPIC_API_KEY).',
+        'AI analysis is not configured on the server (no usable AI provider key).',
       );
     }
 

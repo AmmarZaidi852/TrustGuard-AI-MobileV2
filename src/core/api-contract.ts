@@ -71,6 +71,7 @@ export type ApiErrorCode =
   | 'rate_limited'
   | 'provider_billing'
   | 'model_refused'
+  | 'content_blocked'
   | 'model_unavailable'
   | 'invalid_model_output'
   | 'timeout'

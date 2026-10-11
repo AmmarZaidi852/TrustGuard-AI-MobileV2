@@ -1,25 +1,26 @@
-import { readServerEnv, warnAboutKeyProblem } from '@/server/env';
+import { readServerEnv, warnAboutConfigProblem } from '@/server/env';
 import { createSourceDiscoverer } from '@/server/evidence/discovery';
 import { createSourceEvaluator } from '@/server/evidence/evaluation';
 import { createEvidenceHandler } from '@/server/evidence/handler';
-import { createProviderClient } from '@/server/provider-client';
+import { createAiProvider } from '@/server/provider-client';
 import { createRateLimiter } from '@/server/rate-limit';
 
 // Server-only route: the API key is read here and never reaches the app bundle.
 const env = readServerEnv();
-warnAboutKeyProblem(env);
+warnAboutConfigProblem(env);
 
-function createServices(apiKey: string) {
+function createServices() {
+  if (!env.ai) return null;
   // Web search plus evaluation can take a while; allow up to 90 s per provider call.
-  const client = createProviderClient({ apiKey, timeout: 90_000 });
+  const { client, model, extras } = createAiProvider(env.ai, { timeout: 90_000 });
   return {
-    discover: createSourceDiscoverer({ client, model: env.claimModel }),
-    evaluate: createSourceEvaluator({ client, model: env.claimModel }),
+    discover: createSourceDiscoverer({ client, model, extras }),
+    evaluate: createSourceEvaluator({ client, model, extras }),
   };
 }
 
 const handler = createEvidenceHandler({
-  services: env.anthropicApiKey ? createServices(env.anthropicApiKey) : null,
+  services: createServices(),
   // Source checks cost more (web search + two model calls), so the limit is tighter.
   allowRequest: createRateLimiter({ limit: 10, windowMs: 10 * 60 * 1000 }),
 });

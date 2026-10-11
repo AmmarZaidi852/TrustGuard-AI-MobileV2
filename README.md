@@ -8,7 +8,8 @@ is being claimed, how trustworthy it appears, why, and what evidence supports th
 without claiming more certainty than the evidence allows.
 
 Built iOS-first with Expo (SDK 57), React Native, Expo Router and TypeScript. AI analysis and
-web source checking use Claude via the Anthropic API, called only from the backend.
+web source checking use Claude, called only from the backend, either directly through the
+Anthropic API or through OpenRouter's Anthropic-compatible endpoint (routed only to Anthropic).
 
 ```
 image ──► /api/v1/images/analyze ──► Claude vision: visible text + up to 3 claims (grounded)
@@ -29,20 +30,27 @@ failure behaviour, security) · [DESIGN.md](DESIGN.md) (product stance, result s
 
 ## Running on iPhone (development)
 
-```bash
+Set the provider key in your **process environment** (not in an `.env` / `.env.local` file:
+Expo loads those into the dev server and has logged their values). See `.env.example` for all
+variables. For example, in PowerShell for OpenRouter:
+
+```powershell
+$env:TRUSTGUARD_AI_PROVIDER = 'openrouter'
+$env:OPENROUTER_API_KEY = '<your sk-or- key>'   # or ANTHROPIC_API_KEY for Anthropic
 npm install
-cp .env.example .env.local   # then set ANTHROPIC_API_KEY
-npm start                    # scan the QR code with the iPhone Camera (Expo Go), or press i for the simulator
+npm start   # scan the QR code with the iPhone Camera (Expo Go), or press i for the simulator
 ```
 
 The dev server also serves the API routes, and the app calls them with relative URLs, so no
 extra backend process is needed. The API key stays on your computer and is never sent to the
-phone.
+phone. A key is only sent to the provider that issued it; a mismatched key disables AI features
+and logs a warning (without the key).
 
 ## Installable build (demo)
 
 1. Deploy the API routes: `npx expo export -p web && npx eas-cli@latest deploy`, then set
-   `ANTHROPIC_API_KEY` as a secret environment variable in EAS Hosting.
+   `TRUSTGUARD_AI_PROVIDER` and the matching `OPENROUTER_API_KEY` / `ANTHROPIC_API_KEY` as
+   secret environment variables in EAS Hosting.
 2. Point the app at it in `app.json`: `"plugins": [["expo-router", { "origin": "https://<your-deployment>.expo.app" }]]`.
 3. Build for iOS: `npx eas-cli@latest build --platform ios` (bundle ID `com.ammarzaidi.trustguardai`).
 

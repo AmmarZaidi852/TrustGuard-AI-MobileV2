@@ -62,6 +62,8 @@ export function toUserMessage(error: unknown): string {
             return 'Too many analyses in a short time. Wait a few minutes and try again.';
           case 'provider_billing':
             return 'The AI service has run out of credits, so no analysis was made. Please try again later.';
+          case 'content_blocked':
+            return "The AI service's content filter blocked this request, so no assessment was made.";
           case 'model_refused':
             return 'The AI model declined to analyze this content, so no assessment was made.';
           case 'model_unavailable':

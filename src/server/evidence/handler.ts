@@ -59,7 +59,7 @@ export function createEvidenceHandler({
     if (!services) {
       return errorResponse(
         'not_configured',
-        'Source checking is not configured on the server (no usable ANTHROPIC_API_KEY).',
+        'Source checking is not configured on the server (no usable AI provider key).',
       );
     }
     if (!allowRequest(clientKey(request))) {

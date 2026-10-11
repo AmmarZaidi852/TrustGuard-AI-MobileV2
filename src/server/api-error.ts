@@ -19,6 +19,7 @@ export const STATUS_BY_CODE: Record<ApiErrorCode, number> = {
   rate_limited: 429,
   provider_billing: 503,
   model_refused: 422,
+  content_blocked: 422,
   model_unavailable: 502,
   invalid_model_output: 502,
   timeout: 504,
@@ -36,14 +37,42 @@ export function errorResponse(code: ApiErrorCode, message: string): Response {
   return Response.json(body, { status: STATUS_BY_CODE[code] });
 }
 
-/** Maps Anthropic SDK failures to API errors without leaking provider details. */
+/**
+ * True when a 403 is a content block rather than a permissions problem. OpenRouter
+ * uses 403 for both; its moderation/guardrail errors carry `metadata.reasons` and
+ * `flagged_input`. Nothing from the body is passed on (it can quote user content).
+ */
+export function isContentBlock(body: unknown): boolean {
+  const error = (body as { error?: { message?: unknown; metadata?: Record<string, unknown> } })
+    ?.error;
+  if (!error || typeof error !== 'object') return false;
+  const metadata = error.metadata;
+  if (metadata && (Array.isArray(metadata.reasons) || typeof metadata.flagged_input === 'string')) {
+    return true;
+  }
+  return typeof error.message === 'string' && /moderation|flagged|guardrail/i.test(error.message);
+}
+
+/**
+ * Maps provider failures (Anthropic, or OpenRouter's Anthropic-compatible endpoint,
+ * both surfaced by the Anthropic SDK) to API errors without leaking provider details.
+ */
 export function mapAnthropicError(error: unknown): ApiError {
   if (error instanceof ApiError) return error;
-  if (
-    error instanceof Anthropic.AuthenticationError ||
-    error instanceof Anthropic.PermissionDeniedError
-  ) {
+  if (error instanceof Anthropic.AuthenticationError) {
     return new ApiError('not_configured', 'The AI provider rejected the server credentials.');
+  }
+  if (error instanceof Anthropic.PermissionDeniedError) {
+    if (isContentBlock(error.error)) {
+      return new ApiError(
+        'content_blocked',
+        "The AI provider's content filter blocked this request, so no analysis was made.",
+      );
+    }
+    return new ApiError(
+      'not_configured',
+      'The AI provider denied access for the server credentials.',
+    );
   }
   if (error instanceof Anthropic.RateLimitError) {
     return new ApiError('rate_limited', 'The AI provider is busy. Try again in a minute.');
