@@ -1,5 +1,7 @@
 import type { ClaimAnalysisRequest } from '@/core/api-contract';
 
+import { escapeUntrusted } from '../evidence/untrusted';
+
 /**
  * Kept byte-stable (no dates or per-request values) so it can be prompt-cached.
  * Per-request details go in the user message.
@@ -41,6 +43,6 @@ export function buildClaimAnalysisUserMessage(
 Today's date: ${today}.
 
 <content>
-${request.text}
+${escapeUntrusted(request.text)}
 </content>`;
 }

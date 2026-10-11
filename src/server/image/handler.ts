@@ -64,7 +64,7 @@ export function createImageHandler({
     if (!analyzer) {
       return errorResponse(
         'not_configured',
-        'Image analysis is not configured on the server (missing ANTHROPIC_API_KEY).',
+        'Image analysis is not configured on the server (no usable ANTHROPIC_API_KEY).',
       );
     }
     if (!allowRequest(clientKey(request))) {

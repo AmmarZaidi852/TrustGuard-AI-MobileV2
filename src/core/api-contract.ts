@@ -69,6 +69,7 @@ export type ApiErrorCode =
   | 'invalid_request'
   | 'not_configured'
   | 'rate_limited'
+  | 'provider_billing'
   | 'model_refused'
   | 'model_unavailable'
   | 'invalid_model_output'

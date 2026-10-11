@@ -10,7 +10,9 @@ import type { ImageClaim, ImageClaimAnalysis } from '../types';
  *   prediction, and its quote actually appears in the transcribed text;
  * - nothing is checkable when the text is unreadable or there is no text;
  * - claims must be complete statements (3+ words), like typed claims;
- * - the primary claim must be checkable, otherwise the first checkable one is used.
+ * - the primary claim must be checkable, otherwise the first checkable one is used;
+ * - text that tries to instruct the analyzer is flagged even if the model did not
+ *   flag it, and a claim that is itself such an instruction is never checkable.
  */
 
 export const MAX_IMAGE_CLAIMS = 3;
@@ -18,6 +20,21 @@ const MAX_FIELD = 600;
 const MAX_TRANSCRIPT = 2000;
 
 const clip = (text: string, max = MAX_FIELD) => text.replace(/\s+/g, ' ').trim().slice(0, max);
+
+/**
+ * Phrases that address an AI system rather than a human reader. Deliberately
+ * narrow: this backs up the model's own flag, it does not replace it.
+ */
+const INSTRUCTION_PATTERNS = [
+  /\b(ignore|disregard|forget|override)\b[^.\n]{0,40}\b(instructions?|rules|prompts?|guidelines)\b/i,
+  /\byou are now\b/i,
+  /\b(system|developer) (prompt|message|instructions?)\b/i,
+  /\b(mark|rate|label|classify|report|flag|treat)\b[^.\n]{0,30}\bas\b[^.\n]{0,15}\b(true|verified|reliable|accurate|credible|legit(imate)?)\b/i,
+];
+
+export function looksLikeInstructions(text: string): boolean {
+  return INSTRUCTION_PATTERNS.some((pattern) => pattern.test(text));
+}
 
 /** Lower-case, punctuation-free, single-spaced text for robust substring checks. */
 export function normalizeForMatch(text: string): string {
@@ -51,6 +68,8 @@ function guardClaim(claim: ImageClaim, visibleText: string, textUsable: boolean)
     // Must also be a complete statement, as typed claims are (see validateTextInput).
     checkable:
       grounded &&
+      !looksLikeInstructions(claim.text) &&
+      !looksLikeInstructions(quote) &&
       claim.isFactual &&
       !notCheckableType &&
       claim.text.trim().split(/\s+/).length >= 3,
@@ -80,6 +99,7 @@ export function guardImageAnalysis(analysis: ImageClaimAnalysis): ImageClaimAnal
     visibleText,
     claims,
     primaryClaimIndex,
+    containsInstructions: analysis.containsInstructions || looksLikeInstructions(visibleText),
     uncertainty: clip(analysis.uncertainty),
   };
 }

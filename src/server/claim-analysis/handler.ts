@@ -55,7 +55,7 @@ export function createClaimAnalysisHandler({
     if (!analyzer) {
       return errorResponse(
         'not_configured',
-        'AI analysis is not configured on the server (missing ANTHROPIC_API_KEY).',
+        'AI analysis is not configured on the server (no usable ANTHROPIC_API_KEY).',
       );
     }
 
@@ -73,7 +73,10 @@ export function createClaimAnalysisHandler({
         log(`[claim-analysis] ${error.code}: ${error.message}`);
         return errorResponse(error.code, error.message);
       }
-      log(`[claim-analysis] unexpected error: ${error instanceof Error ? error.message : error}`);
+      // Only the error type: raw messages may carry provider responses or request data.
+      log(
+        `[claim-analysis] unexpected error (${error instanceof Error ? error.name : typeof error})`,
+      );
       return errorResponse('internal', 'Unexpected error while analyzing.');
     }
   };

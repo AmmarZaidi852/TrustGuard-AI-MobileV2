@@ -133,7 +133,8 @@ export function createSourceEvaluator({
       const mapped = mapAnthropicError(error);
       // A provider/credential failure is reported as such; anything else about the
       // evaluation step is "sources found but not evaluated".
-      if (['not_configured', 'rate_limited', 'timeout'].includes(mapped.code)) throw mapped;
+      if (['not_configured', 'rate_limited', 'provider_billing', 'timeout'].includes(mapped.code))
+        throw mapped;
       throw new ApiError('evaluation_failed', mapped.message);
     }
 

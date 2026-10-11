@@ -14,13 +14,13 @@ facts go here; limitations are stated explicitly.
 
 ## Phases
 
-| Phase                                                                | Status   | Commit    |
-| -------------------------------------------------------------------- | -------- | --------- |
-| 1. Foundation: screens, domain model, scoring, heuristics, result UI | Done     | `24da1c1` |
-| 2. Real AI claim analysis via a secure backend route                 | Done     | `ed32179` |
-| 3. Source discovery and source-backed verification                   | Done     | `53f26ae` |
-| 4. Image claim analysis (Claude vision → existing verification)      | Done     | `cab1ce1` |
-| 5. Hardening                                                         | **Next** | –         |
+| Phase                                                                | Status                               | Commit    |
+| -------------------------------------------------------------------- | ------------------------------------ | --------- |
+| 1. Foundation: screens, domain model, scoring, heuristics, result UI | Done                                 | `24da1c1` |
+| 2. Real AI claim analysis via a secure backend route                 | Done                                 | `ed32179` |
+| 3. Source discovery and source-backed verification                   | Done                                 | `53f26ae` |
+| 4. Image claim analysis (Claude vision → existing verification)      | Done                                 | `cab1ce1` |
+| 5. Hardening                                                         | **In progress** (security gate done) | –         |
 
 ## Phase 3: source discovery and claim checking (`53f26ae`, pushed to main)
 
@@ -148,7 +148,64 @@ claim-analyzer timeout test was already updated in Phase 3.
   found 23/26 suites and a missing file. It passed on the next run. It is probably OneDrive sync
   in the project folder, but that is not confirmed.
 
-## Next: Phase 5, hardening
+## Phase 5: hardening (in progress)
 
-End-to-end failure-mode testing with a live API key (text, sources and images), native iPhone
-testing, limits and latency tuning, and polish. Not started.
+### Security gate (before any provider change)
+
+Run before considering a switch to OpenRouter. All existing protections were kept; nothing was
+loosened. **The provider was not changed and no live test was run.**
+
+**Gaps found and fixed (all provider-agnostic):**
+
+- Key isolation: the Anthropic SDK silently reads `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`
+  and `ANTHROPIC_LOG` from the environment, so the key could be redirected, a second credential
+  sent, or request bodies (user text and images) debug-logged. All clients are now created by
+  `server/provider-client.ts` with the host, auth and log level pinned.
+- Key isolation: an OpenRouter-format key (`sk-or-`) in `ANTHROPIC_API_KEY` would have been sent
+  to Anthropic. It is now refused (`not_configured`, with a start-up warning that never contains
+  the key).
+- Logs: unexpected errors were logged with their raw message, so provider or request text could
+  reach the logs. Now only the error type is logged.
+- Prompt injection: claim analysis put user text, and text read from images, into `<content>`
+  unescaped, so `</content>` could break out of the tag. It is now escaped, as the source
+  prompts already were.
+- Image injection: detection relied only on the model's own flag. A deterministic detector now
+  also flags it, and a claim that is itself an instruction is never checkable.
+- Source integrity: a citation whose URL never appeared in the search results was accepted. Such
+  citations are now rejected as fabricated. The blocked low-accountability domains are also
+  enforced in code, not only through the search tool option.
+- Source integrity: a discovery response where no search ran was shown as "searched, found
+  nothing". It is now `search_unavailable`.
+- Errors: insufficient credits (402) and HTTP 408 fell through to a generic "provider returned an
+  error". They now map to the new `provider_billing` code (with a specific message) and to
+  `timeout`. A malformed 200 body (non-JSON, or not a message) became a generic 500; it is now
+  `invalid_model_output`.
+- Search error codes from the provider are echoed to the app only if they are well-formed.
+
+**Security tests** (`src/server/__tests__/security-gate.test.ts`, 78 tests): app providers →
+real handlers → real Anthropic SDK → mocked provider HTTP. They cover image prompt injection
+(compromised reading, instruction-only image, tag breakout, image only in the image block),
+source integrity (missing, malformed and fabricated citations, fabricated source ids,
+unsupported and low-relevance verdicts, tampered backend response), key isolation (pinned host
+despite env overrides, the key echoed in 401/402/403/429/500/529 bodies never reaching
+responses, logs or user messages, the OpenRouter key refused by the real route modules with no
+outbound request) and provider failures (14 failure kinds × claim, image, search and evaluation
+steps: never a result, or never a verified one). These are **mocked**: they prove the code's
+handling, not live provider behaviour.
+
+**Bundle scan:** web (`dist/client`) and iOS/Android Hermes bundles (`dist/_expo`) contain no key
+pattern (`sk-ant-`, `sk-or-v1-`), key names, `x-api-key`, the Anthropic host or SDK, search tool
+config, prompts or `src/server` paths. The server bundle references the key name (control) but
+holds no key value.
+
+**OpenRouter compatibility (from OpenRouter's docs, not tested):** see the gate report. Open
+items: `fallbacks: 'default'` is not OpenRouter's format; `stop_reason: "refusal"` is not in
+OpenRouter's documented list (handled fail-closed); a 403 there can mean OpenRouter moderation,
+which the current mapping would show as a credential problem; whether `blocked_domains` and
+Anthropic-generated citations are passed through must be checked live; requests should be
+pinned to the Anthropic upstream.
+
+### Remaining Phase 5 work
+
+Live end-to-end tests (text, sources and images), native iPhone testing, limits and latency
+tuning, and polish.

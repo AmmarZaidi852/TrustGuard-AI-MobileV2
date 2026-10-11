@@ -1,10 +1,11 @@
-import Anthropic from '@anthropic-ai/sdk';
+import type Anthropic from '@anthropic-ai/sdk';
 import { betaZodOutputFormat } from '@anthropic-ai/sdk/helpers/beta/zod';
 
 import type { ClaimAnalysisRequest } from '@/core/api-contract';
 import type { ModelClaimAnalysis } from '@/core/types';
 
 import { mapAnthropicError } from '../api-error';
+import { createProviderClient } from '../provider-client';
 import { ClaimAnalysisError } from './errors';
 import { CLAIM_ANALYSIS_SYSTEM_PROMPT, buildClaimAnalysisUserMessage } from './prompt';
 import { ClaimAnalysisOutputSchema, toModelClaimAnalysis } from './schema';
@@ -24,7 +25,7 @@ export interface AnthropicAnalyzerOptions {
 export function createAnthropicClaimAnalyzer({
   apiKey,
   model,
-  client = new Anthropic({ apiKey, timeout: 50_000, maxRetries: 1 }),
+  client = createProviderClient({ apiKey, timeout: 50_000 }),
   now = () => new Date(),
 }: AnthropicAnalyzerOptions): ClaimAnalyzerFn {
   return async (request) => {

@@ -59,7 +59,7 @@ export function createEvidenceHandler({
     if (!services) {
       return errorResponse(
         'not_configured',
-        'Source checking is not configured on the server (missing ANTHROPIC_API_KEY).',
+        'Source checking is not configured on the server (no usable ANTHROPIC_API_KEY).',
       );
     }
     if (!allowRequest(clientKey(request))) {
@@ -97,7 +97,8 @@ export function createEvidenceHandler({
         log(`[evidence] ${error.code}: ${error.message}`);
         return errorResponse(error.code, error.message);
       }
-      log(`[evidence] unexpected error: ${error instanceof Error ? error.message : error}`);
+      // Only the error type: raw messages may carry provider responses or request data.
+      log(`[evidence] unexpected error (${error instanceof Error ? error.name : typeof error})`);
       return errorResponse('internal', 'Unexpected error while checking sources.');
     }
   };

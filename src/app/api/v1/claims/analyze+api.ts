@@ -1,10 +1,11 @@
 import { createAnthropicClaimAnalyzer } from '@/server/claim-analysis/anthropic-analyzer';
 import { createClaimAnalysisHandler } from '@/server/claim-analysis/handler';
-import { readServerEnv } from '@/server/env';
+import { readServerEnv, warnAboutKeyProblem } from '@/server/env';
 import { createRateLimiter } from '@/server/rate-limit';
 
 // Server-only route: the API key is read here and never reaches the app bundle.
 const env = readServerEnv();
+warnAboutKeyProblem(env);
 
 const handler = createClaimAnalysisHandler({
   analyzer: env.anthropicApiKey

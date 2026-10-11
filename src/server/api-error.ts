@@ -17,6 +17,7 @@ export const STATUS_BY_CODE: Record<ApiErrorCode, number> = {
   invalid_request: 400,
   not_configured: 503,
   rate_limited: 429,
+  provider_billing: 503,
   model_refused: 422,
   model_unavailable: 502,
   invalid_model_output: 502,
@@ -50,6 +51,15 @@ export function mapAnthropicError(error: unknown): ApiError {
   if (error instanceof Anthropic.BadRequestError) {
     return new ApiError('model_unavailable', 'The AI provider rejected the request.');
   }
+  if (error instanceof Anthropic.APIError && error.status === 402) {
+    return new ApiError(
+      'provider_billing',
+      'The AI provider account cannot cover this request (insufficient credits).',
+    );
+  }
+  if (error instanceof Anthropic.APIError && error.status === 408) {
+    return new ApiError('timeout', 'The AI provider took too long to respond.');
+  }
   if (error instanceof Anthropic.APIConnectionTimeoutError) {
     return new ApiError('timeout', 'The AI provider took too long to respond.');
   }
@@ -62,6 +72,13 @@ export function mapAnthropicError(error: unknown): ApiError {
   if (error instanceof Anthropic.AnthropicError) {
     // The SDK could not parse the model output against the schema.
     return new ApiError('invalid_model_output', 'The AI model returned a malformed response.');
+  }
+  // Compared by name: the fetch implementation may throw these from another JS realm.
+  const name =
+    typeof error === 'object' && error !== null ? (error as { name?: unknown }).name : null;
+  if (name === 'SyntaxError' || name === 'TypeError') {
+    // The provider answered, but not with a well-formed message (e.g. a proxy error page).
+    return new ApiError('invalid_model_output', 'The AI provider returned a malformed response.');
   }
   return new ApiError('internal', 'Unexpected error while analyzing.');
 }
