@@ -231,7 +231,57 @@ annotations, stripped citations, URL-only citations, malformed search results): 
 - Anthropic's in-call fallback for safety-classifier refusals is not used via OpenRouter, so
   some sensitive health claims may be refused more often.
 
+### OpenRouter mocked compatibility suite (zero spend)
+
+The live probe was **not** run: the user set a zero-spending constraint (2026-10-14), so no
+OpenRouter, Anthropic or other billable request was made. Instead,
+`src/server/__tests__/openrouter-provider.test.ts` (67 tests) runs `readServerEnv` →
+`createAiProvider` → the analyzers and the **real API route modules** → the real Anthropic SDK →
+a deterministic fixture network that answers in OpenRouter's documented shapes and fails on any
+other host.
+
+`jest.setup.ts` now guarantees that no test can reach a provider: it removes all provider
+variables (`ANTHROPIC_*`, `OPENROUTER_API_KEY`, `TRUSTGUARD_*`) from the test process and
+replaces the global `fetch` with one that refuses every request. Tests only reach a network
+through a fetch they inject themselves. Keys in tests are synthetic and built at runtime.
+Verification was also run with those variables cleared in the shell.
+
+**Mock-verified (what our code sends and how it handles replies):**
+
+- Requests: every step (claim, discovery, evaluation, vision) is a `POST` to
+  `https://openrouter.ai/api/v1/messages?beta=true` with `Authorization: Bearer` only (no
+  `x-api-key`), the OpenRouter model id (or a validated override), and
+  `provider: { only: ['anthropic'], allow_fallbacks: false, require_parameters: true }`. No
+  Anthropic `fallbacks`/`betas`, and no streaming. Token budgets per step. Requests are
+  deterministic. A mutation check (`require_parameters: false`) made 4 tests fail.
+- Structured outputs and effort: claim, evaluation and vision send `effort: "medium"` and exactly
+  the JSON schema generated from their Zod schemas (all fields required). Discovery sends
+  `effort: "low"`, no format and only `web_search_20260209` with `max_uses` and
+  `blocked_domains`. Schema-violating output is rejected. A `require_parameters` 404 or an
+  unsupported-parameter 400 fails the request (never silently degraded).
+- Citations: `cited_text` becomes the source excerpt (whitespace normalized, clipped to 400
+  characters). Up to 2 distinct excerpts are kept per page across text blocks, and the title
+  falls back to the search result. Empty, whitespace-only, non-string or missing `cited_text`
+  is rejected and counted. Blocked domains are rejected even if the search returned them.
+  `pause_turn` continuations keep the routing. Search tool errors become `search_unavailable`,
+  with only well-formed codes echoed.
+- Routes (with OpenRouter configured): successful claim, evidence and image responses. For
+  each route, 401, 402, 403 moderation, 404 routing, 429, 502, an error body with HTTP 200, a
+  non-JSON body and a refusal all give an error response, never a result. A failed evaluation
+  step after successful discovery returns an error, not unevaluated sources. No key appears in
+  any response body or log. With no key configured, no request is made.
+
+**Still unverified (needs a live provider, deliberately not done):** everything listed above
+under "No live call has been made". In short: whether OpenRouter accepts these exact requests
+(web search tool, `output_config` format and effort with `require_parameters`), whether it
+returns `web_search_result_location` citations with `cited_text`, the real refusal and
+moderation shapes, and latency and cost. The fixtures encode our expectation of those shapes,
+not observed responses.
+
+**Tests/build status:** 28 Jest suites / 625 tests, all passing; format, lint, typecheck and
+`expo export` (3 API routes) pass.
+
 ### Remaining Phase 5 work
 
-Live end-to-end tests (text, sources and images), native iPhone testing, limits and latency
-tuning, and polish.
+A live end-to-end probe (text, sources and images), once spending is approved. Also native
+iPhone testing, limits and latency tuning, and polish.
