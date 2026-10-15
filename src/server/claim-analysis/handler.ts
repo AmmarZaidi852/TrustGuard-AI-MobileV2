@@ -46,6 +46,8 @@ export function createClaimAnalysisHandler({
   log = (message) => console.error(message),
 }: ClaimAnalysisHandlerDeps) {
   return async function handle(request: Request): Promise<Response> {
+    // Started on arrival, like the app's timeout, so reading the body counts too.
+    const signal = requestDeadline(request, budgetMs);
     let payload: ClaimAnalysisRequest;
     try {
       payload = await readRequest(request);
@@ -71,7 +73,7 @@ export function createClaimAnalysisHandler({
     }
 
     try {
-      return Response.json(await analyzer(payload, { signal: requestDeadline(request, budgetMs) }));
+      return Response.json(await analyzer(payload, { signal }));
     } catch (error) {
       if (error instanceof ClaimAnalysisError) {
         log(`[claim-analysis] ${error.code}: ${error.message}`);

@@ -372,6 +372,50 @@ need a new `sk-ant-` key and no code changes.
 **Tests/build status:** 30 Jest suites / 651 tests, all passing; format, lint, typecheck and
 `expo export` (3 API routes) pass.
 
+### Independent review of e45e371 (zero spend, 2026-10-15)
+
+No live API calls, no deployment; $0 spent.
+
+**Confirmed by local tests (mocked provider, real SDK):**
+
+- **Bug fixed: a cancel mid-body was reported as an internal error.** When the deadline (or a
+  client disconnect) fired after the provider's response headers arrived but before the body
+  finished, the SDK threw a bare `AbortError`, not `APIUserAbortError`. A probe confirmed it
+  was mapped to `internal` (500 "Unexpected error"), or to `evaluation_failed` during
+  evaluation. `mapAnthropicError` now maps `AbortError`/`TimeoutError` names to `timeout`. No
+  extra provider call was made in either case.
+- **Bug fixed: the budget started after the upload was read.** All three handlers created the
+  deadline after reading the body, but the app's timer starts before it uploads. A slow ~7 MB
+  image upload could therefore push server-side provider calls past the app's 90 s timeout.
+  The deadline is now created when the request arrives. A streamed-upload test (80 ms upload +
+  50 ms call, 100 ms budget) failed before and passes now.
+- **Hardening: rate-limit keys must be IP-shaped** (`[0-9a-f:.]`, 2–45 characters, lowercased).
+  Before, any header value (up to the runtime's header size limit) became a map key, so a
+  caller could store large keys or churn the 10,000-entry map, whose overflow clears every
+  counter.
+- **Verified safe:** once the signal has aborted, the SDK sends no request at all (a probe and a
+  test found zero fetch calls), so timed-out work cannot trigger an evaluation call, a search
+  continuation or a retry.
+- The three new deadline regressions fail with the fixes removed. `deadline.test.ts` now has 27
+  tests and `rate-limit.test.ts` 5.
+
+**Assumptions (not verified):**
+
+- Cloudflare overwrites any client-sent `CF-Connecting-IP`, and EAS Hosting passes the real one
+  through to the API route. If EAS puts its own worker in front, the value could be a Cloudflare
+  address, and all users would share one bucket.
+- Off Cloudflare (Expo dev server, another host), both headers are caller-controlled, so the
+  limit can be bypassed there; with no headers, everyone shares the `unknown` bucket. Local
+  development only.
+- Whether the hosting runtime invokes the handler before the body has fully arrived (Workers
+  stream request bodies; not confirmed for EAS). If it buffers first, the upload time still
+  isn't counted, so the 15 s image margin is all there is.
+- Whether a Workers client disconnect aborts `request.signal`, and whether cancelled provider
+  calls are billed for tokens already generated.
+
+**Tests run:** full Jest, 30 suites / 657 tests, all passing; format, lint and typecheck pass.
+`expo export` was not re-run: no route files or app code changed.
+
 ### Remaining Phase 5 work
 
 A live end-to-end probe (text, sources and images), once spending is approved. Also native

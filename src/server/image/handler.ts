@@ -32,6 +32,9 @@ export function createImageHandler({
   log = (message) => console.error(message),
 }: ImageHandlerDeps) {
   return async function handle(request: Request): Promise<Response> {
+    // Started before the upload is read: the app's timeout covers the upload too, so
+    // a slow upload must use up the budget rather than extend the server's work past it.
+    const signal = requestDeadline(request, budgetMs);
     const declaredLength = Number(request.headers.get('content-length') ?? 0);
     if (declaredLength > MAX_IMAGE_REQUEST_BYTES) {
       return errorResponse('image_too_large', 'The image is too large. The limit is 5 MB.');
@@ -80,10 +83,7 @@ export function createImageHandler({
 
     try {
       return Response.json(
-        await analyzer(
-          { image: check.base64, mediaType: check.mediaType },
-          { signal: requestDeadline(request, budgetMs) },
-        ),
+        await analyzer({ image: check.base64, mediaType: check.mediaType }, { signal }),
       );
     } catch (error) {
       if (error instanceof ApiError) {

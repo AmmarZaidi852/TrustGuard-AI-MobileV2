@@ -50,6 +50,9 @@ export function createEvidenceHandler({
   log = (message) => console.error(message),
 }: EvidenceHandlerDeps) {
   return async function handle(request: Request): Promise<Response> {
+    // Started on arrival, like the app's timeout, so reading the body counts too.
+    // One budget for both steps: evaluation gets whatever time the search left.
+    const options = { signal: requestDeadline(request, budgetMs) };
     let payload: EvidenceSearchRequest;
     try {
       payload = await readRequest(request);
@@ -73,8 +76,6 @@ export function createEvidenceHandler({
       );
     }
 
-    // One budget for both steps: evaluation gets whatever time the search left.
-    const options = { signal: requestDeadline(request, budgetMs) };
     try {
       const discovered = await services.discover(payload, options);
       if (discovered.sources.length === 0) {

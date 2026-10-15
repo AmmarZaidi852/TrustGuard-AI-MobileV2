@@ -144,8 +144,10 @@ selected by `src/server/env.ts`:
   (search and evaluation together). Each budget is below the app's timeout for that route (60,
   90 and 150 s, enforced by a test), so the server stops calling the paid provider before the
   app gives up, never after. A client disconnect, if the runtime reports it via
-  `request.signal`, cancels the calls too. A cancelled call is reported as `timeout` (504),
-  including when a provider `Retry-After` is longer than the time left. Retries and up to two
+  `request.signal`, cancels the calls too. The budget starts when the request arrives, before
+  the body (e.g. an image upload) is read, as the app's timeout does. A cancelled call is
+  reported as `timeout` (504), also when it is cancelled mid-body or when a provider
+  `Retry-After` is longer than the time left. Retries and up to two
   search continuations still run while budget remains; a failed continuation fails the request
   (no partial sources). `AbortSignal.timeout`/`any` have AbortController fallbacks in case the
   hosting runtime lacks them.
@@ -263,7 +265,10 @@ _Cannot verify_ and are never searched.
 - **Abuse:** the server re-validates all input; per-client in-memory rate limits (claim analysis
   20 per 10 min, source checks 10 per 10 min, image analyses 10 per 10 min) are best-effort per instance.
   The client is keyed by Cloudflare's `CF-Connecting-IP` first; `X-Forwarded-For` (caller-
-  controlled) is only a fallback for local servers. On EAS Hosting (Cloudflare Workers) requests
+  controlled) is only a fallback for local servers. Off Cloudflare, `CF-Connecting-IP` is
+  caller-controlled too, so the key is only as trustworthy as the proxy in front. Header values
+  that are not IP-shaped (at most 45 characters of `[0-9a-f:.]`) are ignored, and requests with
+  no usable header share one `unknown` bucket. On EAS Hosting (Cloudflare Workers) requests
   spread over many short-lived isolates, so these limits are weaker there; the provider-side
   spend limit is the real cap.
 

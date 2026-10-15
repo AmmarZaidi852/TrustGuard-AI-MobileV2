@@ -39,9 +39,26 @@ const STEP_BY_SYSTEM: Record<string, Step> = {
   [VISION_SYSTEM_PROMPT]: 'vision',
 };
 
-/** `hang` never answers (until aborted); otherwise answers after `afterMs`. */
+/**
+ * `hang` never answers (until aborted); `stall` sends the headers and part of the
+ * body, then nothing more (until aborted); otherwise answers after `afterMs`.
+ */
 type Behaviour =
-  'hang' | { afterMs: number; json: unknown; status?: number; headers?: Record<string, string> };
+  | 'hang'
+  | 'stall'
+  | { afterMs: number; json: unknown; status?: number; headers?: Record<string, string> };
+
+const abortError = () => Object.assign(new Error('aborted'), { name: 'AbortError' });
+
+/** A body that delivers its first chunk, then stops until the signal aborts it. */
+function stalledBody(signal: AbortSignal | null | undefined) {
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode('{"id":"gen-fixture",'));
+      signal?.addEventListener('abort', () => controller.error(abortError()));
+    },
+  });
+}
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -57,8 +74,15 @@ function fixtureProvider(plan: Partial<Record<Step, Behaviour | Behaviour[]>>) {
     if (!behaviour) throw new Error(`No fixture behaviour for ${step}`);
 
     return new Promise<Response>((resolve, reject) => {
-      const abort = () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+      const abort = () => reject(abortError());
       if (init?.signal?.aborted) return abort();
+      if (behaviour === 'stall') {
+        return resolve(
+          new Response(stalledBody(init?.signal), {
+            headers: { 'content-type': 'application/json' },
+          }),
+        );
+      }
       init?.signal?.addEventListener('abort', abort);
       if (behaviour === 'hang') return;
       setTimeout(
@@ -458,5 +482,85 @@ describe('requestDeadline without AbortSignal.timeout / AbortSignal.any', () => 
 
     expect(await errorCode(response)).toBe('timeout');
     expect(provider.calls).toHaveLength(1);
+  });
+});
+
+describe('timed-out work is reported as a timeout and makes no further calls', () => {
+  const evidence = { claim: CLAIM, claimType: 'scientific_health' };
+
+  it('claims: a deadline hit while the response body is arriving is a timeout', async () => {
+    const provider = fixtureProvider({ claim: 'stall' });
+    const response = await claimHandler(provider, 100)(post({ text: CLAIM, mode: 'claim' }));
+
+    expect(response.status).toBe(504);
+    expect(await errorCode(response)).toBe('timeout');
+    expect(provider.calls).toHaveLength(1);
+  });
+
+  it('evidence: a deadline hit while the evaluation body is arriving is a timeout', async () => {
+    const provider = fixtureProvider({
+      discovery: { afterMs: 0, json: searched() },
+      evaluation: 'stall',
+    });
+    const response = await evidenceHandler(provider, 100)(post(evidence));
+
+    expect(response.status).toBe(504);
+    expect(await errorCode(response)).toBe('timeout');
+    expect(provider.calls.map((call) => call.step)).toEqual(['discovery', 'evaluation']);
+  });
+
+  it('evaluation is never sent once the budget has run out', async () => {
+    const provider = fixtureProvider({ evaluation: { afterMs: 0, json: evaluationAnswer } });
+    const evaluate = createSourceEvaluator({
+      client: client(provider.fetchImpl),
+      model: MODEL,
+      extras,
+    });
+    const spent = new AbortController();
+    spent.abort();
+    const pending = evaluate(
+      {
+        claim: CLAIM,
+        claimType: 'scientific_health',
+        sources: [{ id: 'S1', title: 'NCI', url: NCI, domain: 'cancer.gov', excerpts: ['x'] }],
+        searchQueries: ['q'],
+      },
+      { signal: spent.signal },
+    );
+
+    await expect(pending).rejects.toMatchObject({ code: 'timeout' });
+    expect(provider.calls).toHaveLength(0);
+  });
+
+  it('images: the budget starts before the upload is read', async () => {
+    // The upload takes 80 ms and the vision call 50 ms: within a 100 ms budget only
+    // if the clock started after the upload, which the app's own timeout does not.
+    const provider = fixtureProvider({ vision: { afterMs: 50, json: {} } });
+    const handler = createImageHandler({
+      analyzer: createVisionAnalyzer({ client: client(provider.fetchImpl), model: MODEL, extras }),
+      allowRequest,
+      budgetMs: 100,
+      log,
+    });
+    const upload = new TextEncoder().encode(
+      JSON.stringify({ image: IMAGE_BYTES.png, mediaType: 'image/png' }),
+    );
+    const slowBody = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        await sleep(80);
+        controller.enqueue(upload);
+        controller.close();
+      },
+    });
+    const request = new Request('http://localhost/x', {
+      method: 'POST',
+      body: slowBody,
+      duplex: 'half',
+    } as RequestInit);
+    const response = await handler(request);
+
+    expect(response.status).toBe(504);
+    expect(await errorCode(response)).toBe('timeout');
+    expect(provider.calls[0]?.signal?.aborted).toBe(true);
   });
 });

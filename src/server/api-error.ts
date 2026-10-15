@@ -110,6 +110,11 @@ export function mapAnthropicError(error: unknown): ApiError {
   // Compared by name: the fetch implementation may throw these from another JS realm.
   const name =
     typeof error === 'object' && error !== null ? (error as { name?: unknown }).name : null;
+  if (name === 'AbortError' || name === 'TimeoutError') {
+    // Cancelled while the response body was still arriving: the SDK only wraps aborts
+    // that happen before the response headers.
+    return new ApiError('timeout', 'The analysis took too long and was stopped.');
+  }
   if (name === 'SyntaxError' || name === 'TypeError') {
     // The provider answered, but not with a well-formed message (e.g. a proxy error page).
     return new ApiError('invalid_model_output', 'The AI provider returned a malformed response.');
