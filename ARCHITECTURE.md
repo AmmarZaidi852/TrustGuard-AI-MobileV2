@@ -284,3 +284,8 @@ unreadable), the image API handler (bypass attempts, size limits, error mapping,
 image bytes), the vision analyzer (request shape, injection, errors), the image pipeline (all
 verdicts through Phase 3, failures, multiple claims, progress, privacy of stored history) and
 the image UI (pick/preview/replace/remove, invalid image, result rendering).
+
+No test can reach the network: `jest.setup.ts` strips provider variables and makes `fetch`,
+`WebSocket` and Node's `http`/`https`/`net`/`tls` connect functions throw. Tests that need a
+provider inject their own fetch (fixtures with synthetic keys). `network-guard.test.ts` checks
+each blocked route.

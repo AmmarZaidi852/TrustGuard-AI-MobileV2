@@ -16,13 +16,13 @@ facts go here; limitations are stated explicitly.
 
 ## Phases
 
-| Phase                                                                | Status                               | Commit    |
-| -------------------------------------------------------------------- | ------------------------------------ | --------- |
-| 1. Foundation: screens, domain model, scoring, heuristics, result UI | Done                                 | `24da1c1` |
-| 2. Real AI claim analysis via a secure backend route                 | Done                                 | `ed32179` |
-| 3. Source discovery and source-backed verification                   | Done                                 | `53f26ae` |
-| 4. Image claim analysis (Claude vision → existing verification)      | Done                                 | `cab1ce1` |
-| 5. Hardening                                                         | **In progress** (security gate done) | –         |
+| Phase                                                                | Status       | Commit    |
+| -------------------------------------------------------------------- | ------------ | --------- |
+| 1. Foundation: screens, domain model, scoring, heuristics, result UI | Done         | `24da1c1` |
+| 2. Real AI claim analysis via a secure backend route                 | Done         | `ed32179` |
+| 3. Source discovery and source-backed verification                   | Done         | `53f26ae` |
+| 4. Image claim analysis (Claude vision → existing verification)      | Done         | `cab1ce1` |
+| 5. Hardening (merged via PR #1; live/device checks still pending)    | Done locally | `669a1ac` |
 
 ## Phase 3: source discovery and claim checking (`53f26ae`, pushed to main)
 
@@ -151,7 +151,7 @@ claim-analyzer timeout test was already updated in Phase 3.
   found 23/26 suites and a missing file. It passed on the next run. It is probably OneDrive sync
   in the project folder, but that is not confirmed.
 
-## Phase 5: hardening (in progress)
+## Phase 5: hardening (merged to main as `669a1ac`, PR #1)
 
 ### Security gate (before any provider change)
 
@@ -416,7 +416,52 @@ No live API calls, no deployment; $0 spent.
 **Tests run:** full Jest, 30 suites / 657 tests, all passing; format, lint and typecheck pass.
 `expo export` was not re-run: no route files or app code changed.
 
-### Remaining Phase 5 work
+### Post-merge local hardening (zero spend, 2026-10-15)
 
-A live end-to-end probe (text, sources and images), once spending is approved. Also native
-iPhone testing, limits and latency tuning, and polish.
+Done on `main` after PR #1 was merged. No network requests were made: no AI calls, deployments
+or package installs. The new guard tests connect only to a closed local port (127.0.0.1:9).
+
+**Correction:** the earlier note said `jest.setup.ts` "guarantees" that no test can reach a
+provider. It only replaced `fetch`. A probe in the app's test environment found Node's built-in
+`WebSocket` and the `http`/`https`/`net`/`tls` connect functions still usable.
+
+**Changes:**
+
+- `jest.setup.ts` now also blocks `WebSocket`, `http.request`/`get`, `https.request`/`get`,
+  `net.connect`/`createConnection` and `tls.connect` (they throw "Network access is blocked in
+  tests"). New `src/test/__tests__/network-guard.test.ts` (10 tests, app environment) checks
+  every route and that provider variables are stripped. 8 of them failed with the new guard
+  removed.
+- `core/errors.ts`: error responses without a TrustGuardAI error code (from the host or a proxy,
+  e.g. a Cloudflare 524 HTML page) were shown as "The analysis service returned an error
+  (524)". They now get specific messages: 408/504/524 → took too long, 413 → upload too large,
+  429 → too many analyses, 502/503 → temporarily unavailable. The API's `internal` code also has
+  its own message. New `src/core/__tests__/errors.test.ts` (24 tests): every API error code except
+  `not_configured` (turned into a "not set up on the server" message in `remote.ts`) has a
+  specific message, plus each status and a 524 HTML page through the real `postJson`. 9 of them
+  failed with the change removed.
+
+**Coverage before these changes:** 95.9% lines, 86.2% branches. Least covered:
+`hooks/use-analysis-runner.ts` (38% lines; error and double-tap paths are untested because
+there is no hook-testing setup), `components/analysis/progress-steps.tsx` and parts of
+`result-view.tsx`. Not addressed here (UI tests, outside this hardening pass).
+
+**Environment note:** `core.autocrlf=true` checks files out with CRLF, which fails
+`prettier --check` (it expects LF) although Git shows no change. `prettier --write .` fixes the
+working copy; the committed files are LF and unchanged.
+
+**Tests/build status:** `npm run verify` passes: 32 Jest suites / 691 tests, format, lint,
+typecheck and `expo export` (3 API routes). No key-shaped strings in `dist`.
+
+### Remaining work
+
+Needs approval or hardware, not doable for $0 locally:
+
+- Live end-to-end probe (text, sources, images) through OpenRouter: requires spending approval.
+- EAS Hosting deployment check (duration limits, disconnect cancellation, `CF-Connecting-IP`,
+  body streaming): requires a deployment.
+- Native iPhone testing with a development build: requires a device (and an EAS build or a Mac).
+- Latency/budget tuning: needs real timings from the live probe.
+
+Possible local follow-ups: hook/UI tests for `use-analysis-runner` and the progress/result
+components.

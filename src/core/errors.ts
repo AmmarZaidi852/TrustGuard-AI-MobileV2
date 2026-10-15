@@ -41,6 +41,29 @@ export class AnalysisUnavailableError extends Error {
   }
 }
 
+/**
+ * For error responses without a TrustGuardAI error code: those come from the hosting
+ * platform or a proxy in front of the API (e.g. a gateway timeout or an upload size
+ * limit), not from the API itself.
+ */
+function messageForStatus(status: number | undefined): string | null {
+  switch (status) {
+    case 408:
+    case 504:
+    case 524: // Cloudflare: the server did not answer in time.
+      return 'The analysis service took too long to respond. Please try again.';
+    case 413:
+      return 'The upload was too large for the server. Try a smaller image.';
+    case 429:
+      return 'Too many analyses in a short time. Wait a few minutes and try again.';
+    case 502:
+    case 503:
+      return 'The analysis service is temporarily unavailable. Please try again shortly.';
+    default:
+      return null;
+  }
+}
+
 export function toUserMessage(error: unknown): string {
   if (error instanceof ValidationError || error instanceof AnalysisUnavailableError) {
     return error.message;
@@ -82,8 +105,13 @@ export function toUserMessage(error: unknown): string {
           case 'image_too_large':
           case 'invalid_image':
             return error.message;
+          case 'internal':
+            return 'The analysis service hit an unexpected error, so no analysis was made. Please try again.';
           default:
-            return `The analysis service returned an error${error.status ? ` (${error.status})` : ''}.`;
+            return (
+              messageForStatus(error.status) ??
+              `The analysis service returned an error${error.status ? ` (${error.status})` : ''}.`
+            );
         }
     }
   }
