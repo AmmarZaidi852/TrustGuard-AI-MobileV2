@@ -314,6 +314,64 @@ unknown, so the budgets may need retuning after a live probe.
 **Tests/build status:** 29 Jest suites / 637 tests, all passing; format, lint, typecheck and `expo export`
 (3 API routes) pass.
 
+### Deadline audit, rate-limit key and hosting review (zero spend, 2026-10-15)
+
+No live API calls were made and nothing was deployed; $0 spent.
+
+**Audit (code read against `@anthropic-ai/sdk` 0.131.0):** the SDK checks the abort signal
+before each attempt, and its retry backoff sleep wakes on abort, so no retry starts after the
+budget. A provider `Retry-After` longer than the remaining budget therefore ends the request at
+the budget as `timeout`, not `rate_limited`. That is safe, but the message is less precise; left
+as is. Per-attempt timeouts (claims 50 s, images 60 s, evidence 90 s) are below each budget, so
+one retry is still possible within it. Discovery stops after 2 continuations and uses what it
+found; a failed continuation fails the whole request. The app never retries automatically
+(`postJson` has no retry; retries are user-initiated), so it adds no hidden spend.
+
+**Changes:**
+
+- `server/deadline.ts`: AbortController fallbacks for `AbortSignal.timeout` and
+  `AbortSignal.any`. EAS Hosting's runtime docs don't list either API, and if one were missing,
+  `requestDeadline` would throw on every AI request (in the evidence handler it is called outside
+  the `try`). The fallback timer is `unref`'d like the native one.
+- `server/rate-limit.ts`: `clientKey` now prefers `CF-Connecting-IP` (set by Cloudflare, which EAS
+  Hosting runs on) over `X-Forwarded-For`. Before, the first `X-Forwarded-For` entry, which the
+  caller controls, was trusted first, so a caller could get past the per-client limit (and the
+  spend cap it provides) by rotating that header. Local servers without the Cloudflare header
+  still use `X-Forwarded-For`.
+
+**Mock-verified:** `deadline.test.ts` now has 23 tests (11 new): a retryable 529 is retried
+while budget remains; a per-attempt timeout is retried within the budget; a 1-hour
+`Retry-After` ends the request at the budget with one call; an exhausted retry reports
+`model_unavailable`, not `timeout`; continuations are capped at 2 and the partial search is
+then evaluated; a failed continuation returns an error with no partial sources and no
+evaluation call; a client disconnect during evaluation cancels it; and with
+`AbortSignal.timeout`/`any` removed, the budget, client abort, already-aborted client and an
+end-to-end hanging call still work. Breaking the fallback made 3 of those 4 tests fail. New
+`rate-limit.test.ts` (3 tests): a rotated `X-Forwarded-For` behind Cloudflare is still limited.
+
+**Hosting (from docs only, not verified by deployment):** the README's target is EAS Hosting,
+which Expo documents as running on Cloudflare Workers. Neither EAS Hosting page (introduction,
+API routes, worker runtime) documents a request-duration limit. Cloudflare's Workers limits page
+says HTTP-triggered Workers have "no hard limit on duration". CPU time is limited (paid: 30 s
+default, up to 5 min; free: 10 ms), but waiting on the provider is I/O, not CPU. It also says
+"When the client disconnects … tasks associated with that request may be canceled." So the 140 s
+evidence budget looks compatible, but which Cloudflare plan and limits EAS Hosting applies is not
+documented. Also unverified: whether Workers abort `request.signal` on disconnect, whether
+parsing a ~7 MB image upload fits the CPU limit, and whether in-memory rate limits mean anything
+across Workers isolates (likely not much; the provider spend limit is the real cap).
+
+**Provider review:** no change. The User environment has `TRUSTGUARD_AI_PROVIDER=openrouter`,
+an `sk-or-` key in `OPENROUTER_API_KEY`, no `ANTHROPIC_API_KEY` and no model override, so
+`readServerEnv` selects OpenRouter with `anthropic/claude-opus-5.5`, routed only to Anthropic
+with `require_parameters`. (Checked by name and prefix only; no values printed.) This is the
+user-approved setup and the only key available. Trade-off: over OpenRouter, Anthropic's
+server-side refusal fallback is not sent, and whether web search, structured outputs and vision
+pass through OpenRouter's Anthropic endpoint is mock-verified only. Switching to Anthropic would
+need a new `sk-ant-` key and no code changes.
+
+**Tests/build status:** 30 Jest suites / 651 tests, all passing; format, lint, typecheck and
+`expo export` (3 API routes) pass.
+
 ### Remaining Phase 5 work
 
 A live end-to-end probe (text, sources and images), once spending is approved. Also native

@@ -27,7 +27,13 @@ export function createRateLimiter({
   };
 }
 
+/**
+ * The client's address as the platform reports it. EAS Hosting runs on Cloudflare,
+ * which sets `CF-Connecting-IP` itself, so it is preferred. `X-Forwarded-For` is a
+ * fallback for local servers: its first entry is whatever the caller sent, so
+ * trusting it first would let a caller dodge the limit by changing the header.
+ */
 export function clientKey(request: Request): string {
   const forwarded = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim();
-  return forwarded || request.headers.get('cf-connecting-ip') || 'unknown';
+  return request.headers.get('cf-connecting-ip')?.trim() || forwarded || 'unknown';
 }

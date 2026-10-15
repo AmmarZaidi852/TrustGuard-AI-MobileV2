@@ -18,7 +18,7 @@ import { createAnthropicClaimAnalyzer } from '../claim-analysis/anthropic-analyz
 import { createClaimAnalysisHandler } from '../claim-analysis/handler';
 import { CLAIM_ANALYSIS_SYSTEM_PROMPT } from '../claim-analysis/prompt';
 import { ROUTE_BUDGET_MS, requestDeadline } from '../deadline';
-import { createSourceDiscoverer } from '../evidence/discovery';
+import { DISCOVERY_LIMITS, createSourceDiscoverer } from '../evidence/discovery';
 import { createSourceEvaluator } from '../evidence/evaluation';
 import { createEvidenceHandler } from '../evidence/handler';
 import { DISCOVERY_SYSTEM_PROMPT, EVALUATION_SYSTEM_PROMPT } from '../evidence/prompts';
@@ -39,8 +39,9 @@ const STEP_BY_SYSTEM: Record<string, Step> = {
   [VISION_SYSTEM_PROMPT]: 'vision',
 };
 
-/** `hang` never answers (until aborted); a number answers after that many ms. */
-type Behaviour = 'hang' | { afterMs: number; json: unknown; status?: number };
+/** `hang` never answers (until aborted); otherwise answers after `afterMs`. */
+type Behaviour =
+  'hang' | { afterMs: number; json: unknown; status?: number; headers?: Record<string, string> };
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -65,7 +66,7 @@ function fixtureProvider(plan: Partial<Record<Step, Behaviour | Behaviour[]>>) {
           resolve(
             new Response(JSON.stringify(behaviour.json), {
               status: behaviour.status ?? 200,
-              headers: { 'content-type': 'application/json' },
+              headers: { 'content-type': 'application/json', ...behaviour.headers },
             }),
           ),
         behaviour.afterMs,
@@ -84,6 +85,36 @@ const message = (content: unknown[], stop_reason = 'end_turn') => ({
   stop_reason,
   stop_sequence: null,
   usage: { input_tokens: 1, output_tokens: 1 },
+});
+const answer = (output: unknown) => message([{ type: 'text', text: JSON.stringify(output) }]);
+const claimAnswer = answer({
+  extractedClaim: CLAIM,
+  claimCategory: 'scientific_health',
+  verifiable: true,
+  verifiabilityNote: '',
+  assessment: 'contradicted',
+  confidence: 0.7,
+  keyFindings: [],
+  reasoning: 'Fixture.',
+  evidenceNeeded: [],
+  limitations: '',
+});
+const evaluationAnswer = answer({
+  sourceAssessments: [
+    { sourceId: 'S1', relationship: 'contradicts', relevance: 'high', explanation: 'NCI.' },
+  ],
+  verdict: 'contradicted',
+  confidence: 0.6,
+  whatSourcesSay: 'No evidence coffee prevents cancer.',
+  inference: 'Fixture.',
+  uncertainty: 'Fixture.',
+  missingEvidence: [],
+});
+const overloaded = (headers?: Record<string, string>) => ({
+  afterMs: 0,
+  status: 529,
+  json: { error: { code: 529, message: 'Overloaded' } },
+  headers,
 });
 const searched = (stop_reason = 'end_turn') =>
   message(
@@ -112,10 +143,10 @@ const searched = (stop_reason = 'end_turn') =>
   );
 
 /** Real SDK client: generous per-attempt timeout and one retry, as in production. */
-function client(fetchImpl: typeof fetch) {
+function client(fetchImpl: typeof fetch, timeout = 10_000) {
   return createProviderClient(
     { provider: 'openrouter', apiKey: FAKE_KEY },
-    { timeout: 10_000, maxRetries: 1, fetch: fetchImpl },
+    { timeout, maxRetries: 1, fetch: fetchImpl },
   );
 }
 const extras = REQUEST_EXTRAS.openrouter;
@@ -127,12 +158,16 @@ const post = (body: unknown, signal?: AbortSignal) =>
 const errorCode = async (response: Response) =>
   ((await response.json()) as { error?: { code: string } }).error?.code;
 
-function claimHandler(provider: ReturnType<typeof fixtureProvider>, budgetMs: number) {
+function claimHandler(
+  provider: ReturnType<typeof fixtureProvider>,
+  budgetMs: number,
+  attemptTimeoutMs?: number,
+) {
   return createClaimAnalysisHandler({
     analyzer: createAnthropicClaimAnalyzer({
       apiKey: FAKE_KEY,
       model: MODEL,
-      client: client(provider.fetchImpl),
+      client: client(provider.fetchImpl, attemptTimeoutMs),
       extras,
     }),
     allowRequest,
@@ -199,12 +234,7 @@ describe('the server stops calling the provider at the deadline', () => {
 
   it('claims: no retry is started after the budget is spent', async () => {
     // A retryable 529 would normally be retried after a backoff; the budget ends first.
-    const overloaded = {
-      afterMs: 0,
-      status: 529,
-      json: { error: { code: 529, message: 'Overloaded' } },
-    };
-    const provider = fixtureProvider({ claim: [overloaded, 'hang'] });
+    const provider = fixtureProvider({ claim: [overloaded(), 'hang'] });
     const response = await claimHandler(provider, 150)(post({ text: CLAIM, mode: 'claim' }));
 
     expect(await errorCode(response)).toBe('timeout');
@@ -286,29 +316,147 @@ describe('the server stops calling the provider at the deadline', () => {
   });
 
   it('a call that finishes within the budget is unaffected', async () => {
-    const provider = fixtureProvider({
-      claim: {
-        afterMs: 20,
-        json: message([
-          {
-            type: 'text',
-            text: JSON.stringify({
-              extractedClaim: CLAIM,
-              claimCategory: 'scientific_health',
-              verifiable: true,
-              verifiabilityNote: '',
-              assessment: 'contradicted',
-              confidence: 0.7,
-              keyFindings: [],
-              reasoning: 'Fixture.',
-              evidenceNeeded: [],
-              limitations: '',
-            }),
-          },
-        ]),
-      },
-    });
+    const provider = fixtureProvider({ claim: { afterMs: 20, json: claimAnswer } });
     const response = await claimHandler(provider, 1_000)(post({ text: CLAIM, mode: 'claim' }));
     expect(response.status).toBe(200);
+  });
+});
+
+describe('retries, continuations and partial failures under a deadline', () => {
+  const evidence = { claim: CLAIM, claimType: 'scientific_health' };
+
+  it('claims: a retryable failure is still retried while budget remains', async () => {
+    const provider = fixtureProvider({
+      claim: [overloaded({ 'retry-after-ms': '10' }), { afterMs: 0, json: claimAnswer }],
+    });
+    const response = await claimHandler(provider, 2_000)(post({ text: CLAIM, mode: 'claim' }));
+
+    expect(response.status).toBe(200);
+    expect(provider.calls).toHaveLength(2);
+  });
+
+  it('claims: a per-attempt timeout is retried within the budget', async () => {
+    const provider = fixtureProvider({ claim: ['hang', { afterMs: 0, json: claimAnswer }] });
+    // Each attempt may take 50 ms; the request as a whole may take 2 s.
+    const response = await claimHandler(provider, 2_000, 50)(post({ text: CLAIM, mode: 'claim' }));
+
+    expect(response.status).toBe(200);
+    expect(provider.calls).toHaveLength(2);
+  });
+
+  it('claims: a Retry-After beyond the budget ends the request at the budget', async () => {
+    // The SDK would wait an hour before retrying; the deadline wakes it and no retry is sent.
+    // Reported as `timeout`, not `rate_limited`, because the budget is what ended it.
+    const provider = fixtureProvider({ claim: [overloaded({ 'retry-after': '3600' }), 'hang'] });
+    const started = Date.now();
+    const response = await claimHandler(provider, 100)(post({ text: CLAIM, mode: 'claim' }));
+
+    expect(await errorCode(response)).toBe('timeout');
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(provider.calls).toHaveLength(1);
+  });
+
+  it('claims: an exhausted retry reports the provider error, not a timeout', async () => {
+    const provider = fixtureProvider({
+      claim: [overloaded({ 'retry-after-ms': '10' }), overloaded()],
+    });
+    const response = await claimHandler(provider, 2_000)(post({ text: CLAIM, mode: 'claim' }));
+
+    expect(await errorCode(response)).toBe('model_unavailable');
+    expect(provider.calls).toHaveLength(2);
+  });
+
+  it('evidence: continuations are capped, then the partial search is evaluated', async () => {
+    const paused = { afterMs: 0, json: searched('pause_turn') };
+    const provider = fixtureProvider({
+      discovery: [paused, paused, paused, paused],
+      evaluation: { afterMs: 0, json: evaluationAnswer },
+    });
+    const response = await evidenceHandler(provider, 2_000)(post(evidence));
+
+    expect(response.status).toBe(200);
+    expect(provider.calls.map((call) => call.step)).toEqual([
+      ...Array(1 + DISCOVERY_LIMITS.maxContinuations).fill('discovery'),
+      'evaluation',
+    ]);
+    const body = (await response.json()) as { sources: unknown[]; evaluation: unknown };
+    expect(body.sources).toHaveLength(1);
+    expect(body.evaluation).not.toBeNull();
+  });
+
+  it('evidence: a failed continuation fails the request without partial sources', async () => {
+    const provider = fixtureProvider({
+      discovery: [
+        { afterMs: 0, json: searched('pause_turn') },
+        overloaded({ 'retry-after-ms': '10' }),
+        overloaded(),
+      ],
+    });
+    const response = await evidenceHandler(provider, 2_000)(post(evidence));
+
+    const body = (await response.json()) as { error?: { code: string } };
+    expect(body.error?.code).toBe('model_unavailable');
+    expect(body).not.toHaveProperty('sources');
+    // The first turn, then the continuation and its single retry; never an evaluation.
+    expect(provider.calls.map((call) => call.step)).toEqual([
+      'discovery',
+      'discovery',
+      'discovery',
+    ]);
+  });
+
+  it('evidence: a client that disconnects during evaluation cancels it', async () => {
+    const provider = fixtureProvider({
+      discovery: { afterMs: 0, json: searched() },
+      evaluation: 'hang',
+    });
+    const app = new AbortController();
+    const pending = evidenceHandler(provider, 60_000)(post(evidence, app.signal));
+    await sleep(50);
+    app.abort();
+    const response = await pending;
+
+    expect(await errorCode(response)).toBe('timeout');
+    expect(provider.calls.map((call) => call.step)).toEqual(['discovery', 'evaluation']);
+    expect(provider.calls[1].signal?.aborted).toBe(true);
+  });
+});
+
+describe('requestDeadline without AbortSignal.timeout / AbortSignal.any', () => {
+  const { timeout, any } = AbortSignal;
+  beforeEach(() => {
+    // As on a runtime that lacks them.
+    Object.assign(AbortSignal, { timeout: undefined, any: undefined });
+  });
+  afterEach(() => {
+    Object.assign(AbortSignal, { timeout, any });
+  });
+
+  it('still aborts when the budget runs out', async () => {
+    const signal = requestDeadline(post({}), 20)!;
+    expect(signal.aborted).toBe(false);
+    await sleep(60);
+    expect(signal.aborted).toBe(true);
+  });
+
+  it('still aborts when the client goes away', () => {
+    const app = new AbortController();
+    const signal = requestDeadline(post({}, app.signal), 60_000)!;
+    app.abort();
+    expect(signal.aborted).toBe(true);
+  });
+
+  it('is already aborted when the client left before the call', () => {
+    const app = new AbortController();
+    app.abort();
+    expect(requestDeadline(post({}, app.signal), 60_000)!.aborted).toBe(true);
+  });
+
+  it('still cancels a hanging provider call end to end', async () => {
+    const provider = fixtureProvider({ claim: 'hang' });
+    const response = await claimHandler(provider, 100)(post({ text: CLAIM, mode: 'claim' }));
+
+    expect(await errorCode(response)).toBe('timeout');
+    expect(provider.calls).toHaveLength(1);
   });
 });
