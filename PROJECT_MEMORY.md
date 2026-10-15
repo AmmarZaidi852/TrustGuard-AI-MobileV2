@@ -453,6 +453,42 @@ working copy; the committed files are LF and unchanged.
 **Tests/build status:** `npm run verify` passes: 32 Jest suites / 691 tests, format, lint,
 typecheck and `expo export` (3 API routes). No key-shaped strings in `dist`.
 
+### Analysis runner tests (zero spend, 2026-10-15)
+
+Tests only; no production code changed. No network requests beyond Git; no installs.
+
+New `src/hooks/__tests__/use-analysis-runner.test.tsx` (17 tests) uses the installed
+`@testing-library/react-native` `renderHook`, the real pipeline with fixture providers, the
+real history store (AsyncStorage mock) and a spy on `router.push`. Pending work is controlled
+with hand-settled promises, not timers. It covers:
+
+- the idle state; progress stages in order; the result saved to history and opened exactly
+  once;
+- errors (API code, malformed response, timeout, network failure, invalid input, unexpected)
+  shown with their specific messages, with nothing stored and no navigation;
+- a real `postJson` timeout against a server that never answers;
+- duplicate taps while running (the second task never starts);
+- retry after a failure; a new run clearing the old error; `reset()`; no stale stage after a
+  failure mid-progress;
+- unmounting mid-run (no throw, result still saved);
+- the real app providers, created once and reused, with their request refused by the test
+  network guard (the spy shows it reached the guarded `fetch` for `/api/v1/claims/analyze`).
+
+Stable across 3 consecutive runs. Breaking the hook caught each case: removing the duplicate
+guard failed 8 tests, removing the `finally` reset 3, and skipping `saveAnalysis` 2.
+
+**Coverage (full Jest, before → after):** lines 95.96% → 97.10%, statements 93.94% → 95.07%,
+branches 86.69% → 87.33%. `use-analysis-runner.ts` 38.9% → 100% lines and branches.
+`services/providers/index.ts` 25% → 100% lines (branches 50%: the "unavailable" alternatives
+can't be reached while all capabilities are `true`).
+
+**Observed, not changed:** if the user leaves the screen while an analysis runs, the hook still
+saves the result and calls `router.push` to open it when it finishes. The test asserts the save
+only. Whether a late navigation is wanted is a product decision.
+
+**Tests/build status:** `npm run verify` passes: 33 Jest suites / 708 tests, format, lint,
+typecheck and `expo export` (3 API routes). No key-shaped strings in `dist`.
+
 ### Remaining work
 
 Needs approval or hardware, not doable for $0 locally:
@@ -463,5 +499,6 @@ Needs approval or hardware, not doable for $0 locally:
 - Native iPhone testing with a development build: requires a device (and an EAS build or a Mac).
 - Latency/budget tuning: needs real timings from the live probe.
 
-Possible local follow-ups: hook/UI tests for `use-analysis-runner` and the progress/result
-components.
+Possible local follow-ups: UI tests for `components/analysis/progress-steps.tsx` (~14% lines)
+and the uncovered parts of `result-view.tsx`; a decision on navigation after leaving the screen
+mid-analysis.
