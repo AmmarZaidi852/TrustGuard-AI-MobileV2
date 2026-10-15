@@ -59,6 +59,11 @@ export function isContentBlock(body: unknown): boolean {
  */
 export function mapAnthropicError(error: unknown): ApiError {
   if (error instanceof ApiError) return error;
+  // The request's time budget ran out (or the client left): the call was cancelled
+  // on purpose. Checked before APIError, which it extends.
+  if (error instanceof Anthropic.APIUserAbortError) {
+    return new ApiError('timeout', 'The analysis took too long and was stopped.');
+  }
   if (error instanceof Anthropic.AuthenticationError) {
     return new ApiError('not_configured', 'The AI provider rejected the server credentials.');
   }

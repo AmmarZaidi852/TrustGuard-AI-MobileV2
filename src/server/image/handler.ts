@@ -2,6 +2,7 @@ import type { ImageAnalysisRequest } from '@/core/api-contract';
 import { IMAGE_LIMITS, checkImagePayload } from '@/core/image/image-payload';
 
 import { ApiError, errorResponse } from '../api-error';
+import { requestDeadline } from '../deadline';
 import { clientKey } from '../rate-limit';
 import type { VisionAnalyzerFn } from './vision-analyzer';
 
@@ -12,6 +13,8 @@ export interface ImageHandlerDeps {
   /** `null` when the server has no provider credentials configured. */
   analyzer: VisionAnalyzerFn | null;
   allowRequest: (key: string) => boolean;
+  /** Total time for the provider call of one request (see `ROUTE_BUDGET_MS`). */
+  budgetMs?: number;
   /** Receives short messages only. Image bytes are never passed to it. */
   log?: (message: string) => void;
 }
@@ -25,6 +28,7 @@ export interface ImageHandlerDeps {
 export function createImageHandler({
   analyzer,
   allowRequest,
+  budgetMs,
   log = (message) => console.error(message),
 }: ImageHandlerDeps) {
   return async function handle(request: Request): Promise<Response> {
@@ -75,7 +79,12 @@ export function createImageHandler({
     }
 
     try {
-      return Response.json(await analyzer({ image: check.base64, mediaType: check.mediaType }));
+      return Response.json(
+        await analyzer(
+          { image: check.base64, mediaType: check.mediaType },
+          { signal: requestDeadline(request, budgetMs) },
+        ),
+      );
     } catch (error) {
       if (error instanceof ApiError) {
         log(`[image] ${error.code}: ${error.message} (${check.mediaType}, ${check.bytes} bytes)`);

@@ -1,3 +1,4 @@
+import { ROUTE_BUDGET_MS } from '@/server/deadline';
 import { readServerEnv, warnAboutConfigProblem } from '@/server/env';
 import { createImageHandler } from '@/server/image/handler';
 import { createVisionAnalyzer } from '@/server/image/vision-analyzer';
@@ -18,6 +19,7 @@ function createAnalyzer() {
 const handler = createImageHandler({
   analyzer: createAnalyzer(),
   allowRequest: createRateLimiter({ limit: 10, windowMs: 10 * 60 * 1000 }),
+  budgetMs: ROUTE_BUDGET_MS.images,
 });
 
 export function POST(request: Request): Promise<Response> {

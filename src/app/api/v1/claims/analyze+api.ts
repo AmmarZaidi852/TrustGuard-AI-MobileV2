@@ -1,5 +1,6 @@
 import { createAnthropicClaimAnalyzer } from '@/server/claim-analysis/anthropic-analyzer';
 import { createClaimAnalysisHandler } from '@/server/claim-analysis/handler';
+import { ROUTE_BUDGET_MS } from '@/server/deadline';
 import { readServerEnv, warnAboutConfigProblem } from '@/server/env';
 import { createAiProvider } from '@/server/provider-client';
 import { createRateLimiter } from '@/server/rate-limit';
@@ -22,6 +23,7 @@ function createAnalyzer() {
 const handler = createClaimAnalysisHandler({
   analyzer: createAnalyzer(),
   allowRequest: createRateLimiter({ limit: 20, windowMs: 10 * 60 * 1000 }),
+  budgetMs: ROUTE_BUDGET_MS.claims,
 });
 
 export function POST(request: Request): Promise<Response> {

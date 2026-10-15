@@ -281,6 +281,39 @@ not observed responses.
 **Tests/build status:** 28 Jest suites / 625 tests, all passing; format, lint, typecheck and
 `expo export` (3 API routes) pass.
 
+### Request deadlines (limits and latency, zero spend)
+
+**Problem found:** server-side provider time could outlast the app's timeouts, because the SDK
+retries once and discovery can continue twice. Worst cases were about 100 s (claims; app waits
+60 s), 120 s (images; app waits 90 s) and about 720 s (evidence; app waits 150 s). After the app
+showed "timed out", the server could keep calling the paid provider for a result nobody would
+see.
+
+**Fix:** `server/deadline.ts` gives each request one total budget for all of its provider calls,
+retries and continuations: claims 55 s, images 75 s, evidence 140 s (search and evaluation
+share it). The handlers pass the abort signal through the analyzers to the SDK. Per-call
+timeouts are unchanged. A test enforces that each budget is below the app timeout with margin.
+`APIUserAbortError` now maps to `timeout` (504); before, it would have fallen through to a
+generic "provider returned an error". The signal also follows `request.signal`, so a client
+disconnect cancels the calls.
+
+**Mock-verified** (`src/server/__tests__/deadline.test.ts`, 12 tests; real SDK, fixture
+provider, budgets scaled to milliseconds): a hanging call is cancelled at the budget and not
+retried; a retryable 529 is not retried once the budget is spent; a hanging search stops before
+evaluation starts; search and evaluation share one budget, and a timed-out evaluation never
+returns unevaluated sources; search continuations stop at the budget; a client abort cancels
+the call; calls within the budget are unaffected. Removing the signal from the claim analyzer
+made 3 tests fail.
+
+**Unverified:** whether the deployed runtime (Expo server / EAS Hosting) aborts `request.signal`
+when the app disconnects; whether the hosting platform's own request limit is above 140 s; and
+whether a provider call that is cancelled mid-generation is still billed for tokens already
+produced (likely yes, so this caps spend rather than eliminating it). Real latencies are still
+unknown, so the budgets may need retuning after a live probe.
+
+**Tests/build status:** 29 Jest suites / 637 tests, all passing; format, lint, typecheck and `expo export`
+(3 API routes) pass.
+
 ### Remaining Phase 5 work
 
 A live end-to-end probe (text, sources and images), once spending is approved. Also native

@@ -5,6 +5,7 @@ import { evaluateSource, extractDomain } from '@/core/sources/source-evaluation'
 import { validateSourceUrl } from '@/core/sources/url-safety';
 
 import { ApiError, mapAnthropicError } from '../api-error';
+import type { CallOptions } from '../deadline';
 import { REQUEST_EXTRAS, type RequestExtras } from '../provider-client';
 import {
   BLOCKED_SEARCH_DOMAINS,
@@ -184,7 +185,10 @@ export function extractDiscoveredSources(content: unknown[]): DiscoveryResult & 
 /** The subset of the SDK client this module uses, so tests can substitute it. */
 export type CreateClient = Pick<Anthropic, 'beta'>;
 
-export type SourceDiscoverer = (request: EvidenceSearchRequest) => Promise<DiscoveryResult>;
+export type SourceDiscoverer = (
+  request: EvidenceSearchRequest,
+  options?: CallOptions,
+) => Promise<DiscoveryResult>;
 
 export function createSourceDiscoverer({
   client,
@@ -197,7 +201,7 @@ export function createSourceDiscoverer({
   extras?: RequestExtras;
   now?: () => Date;
 }): SourceDiscoverer {
-  return async (request) => {
+  return async (request, { signal } = {}) => {
     const userMessage = {
       role: 'user' as const,
       content: buildDiscoveryUserMessage(request, now().toISOString().slice(0, 10)),
@@ -208,23 +212,27 @@ export function createSourceDiscoverer({
     for (let attempt = 0; attempt <= DISCOVERY_LIMITS.maxContinuations; attempt += 1) {
       let response: Anthropic.Beta.BetaMessage;
       try {
-        response = await client.beta.messages.create({
-          model,
-          max_tokens: 8000,
-          output_config: { effort: 'low' },
-          // Provider-specific fields (fallback model, or OpenRouter routing).
-          ...extras,
-          system: DISCOVERY_SYSTEM_PROMPT,
-          tools: [
-            {
-              type: 'web_search_20260209',
-              name: 'web_search',
-              max_uses: DISCOVERY_LIMITS.maxSearches,
-              blocked_domains: BLOCKED_SEARCH_DOMAINS,
-            },
-          ],
-          messages,
-        });
+        response = await client.beta.messages.create(
+          {
+            model,
+            max_tokens: 8000,
+            output_config: { effort: 'low' },
+            // Provider-specific fields (fallback model, or OpenRouter routing).
+            ...extras,
+            system: DISCOVERY_SYSTEM_PROMPT,
+            tools: [
+              {
+                type: 'web_search_20260209',
+                name: 'web_search',
+                max_uses: DISCOVERY_LIMITS.maxSearches,
+                blocked_domains: BLOCKED_SEARCH_DOMAINS,
+              },
+            ],
+            messages,
+          },
+          // One signal for every continuation: they share the request's time budget.
+          { signal },
+        );
       } catch (error) {
         throw mapAnthropicError(error);
       }

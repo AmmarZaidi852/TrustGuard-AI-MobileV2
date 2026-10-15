@@ -2,6 +2,7 @@ import type { ApiErrorBody, ApiErrorCode, ClaimAnalysisRequest } from '@/core/ap
 import { ValidationError } from '@/core/errors';
 import { validateTextInput } from '@/core/validation';
 
+import { requestDeadline } from '../deadline';
 import { clientKey } from '../rate-limit';
 import type { ClaimAnalyzerFn } from './anthropic-analyzer';
 import { ClaimAnalysisError, STATUS_BY_CODE } from './errors';
@@ -10,6 +11,8 @@ export interface ClaimAnalysisHandlerDeps {
   /** `null` when the server has no provider credentials configured. */
   analyzer: ClaimAnalyzerFn | null;
   allowRequest: (key: string) => boolean;
+  /** Total time for the provider calls of one request (see `ROUTE_BUDGET_MS`). */
+  budgetMs?: number;
   log?: (message: string) => void;
 }
 
@@ -39,6 +42,7 @@ async function readRequest(request: Request): Promise<ClaimAnalysisRequest> {
 export function createClaimAnalysisHandler({
   analyzer,
   allowRequest,
+  budgetMs,
   log = (message) => console.error(message),
 }: ClaimAnalysisHandlerDeps) {
   return async function handle(request: Request): Promise<Response> {
@@ -67,7 +71,7 @@ export function createClaimAnalysisHandler({
     }
 
     try {
-      return Response.json(await analyzer(payload));
+      return Response.json(await analyzer(payload, { signal: requestDeadline(request, budgetMs) }));
     } catch (error) {
       if (error instanceof ClaimAnalysisError) {
         log(`[claim-analysis] ${error.code}: ${error.message}`);

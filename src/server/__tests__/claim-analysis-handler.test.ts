@@ -33,13 +33,13 @@ describe('claim analysis API handler', () => {
     const response = await handler(post(valid));
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual(mockModelContradicted);
-    expect(analyzer).toHaveBeenCalledWith(valid);
+    expect(analyzer).toHaveBeenCalledWith(valid, { signal: expect.any(Object) });
   });
 
   it('normalizes the text with the same validation as the app', async () => {
     const { handler, analyzer } = setup();
     await handler(post({ text: '  NASA   discovered life on Mars.  ', mode: 'claim' }));
-    expect(analyzer).toHaveBeenCalledWith(valid);
+    expect(analyzer).toHaveBeenCalledWith(valid, expect.anything());
   });
 
   it.each([

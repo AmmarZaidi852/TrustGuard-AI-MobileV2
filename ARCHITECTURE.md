@@ -139,6 +139,12 @@ selected by `src/server/env.ts`:
   `not_configured`; 408 and client timeouts → `timeout`; 429 → `rate_limited`; 404/5xx →
   `model_unavailable`; malformed bodies → `invalid_model_output`. Moderation metadata (which can
   quote user content) is never logged or returned.
+- Each request has a total time budget (`server/deadline.ts`) shared by all of its provider
+  calls, SDK retries and web-search continuations: claims 55 s, images 75 s, evidence 140 s
+  (search and evaluation together). Each budget is below the app's timeout for that route (60,
+  90 and 150 s, enforced by a test), so the server stops calling the paid provider before the
+  app gives up, never after. A client disconnect, if the runtime reports it via
+  `request.signal`, cancels the calls too. A cancelled call is reported as `timeout` (504).
 
 ## Source discovery and evaluation (Phase 3)
 

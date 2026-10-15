@@ -1,3 +1,4 @@
+import { ROUTE_BUDGET_MS } from '@/server/deadline';
 import { readServerEnv, warnAboutConfigProblem } from '@/server/env';
 import { createSourceDiscoverer } from '@/server/evidence/discovery';
 import { createSourceEvaluator } from '@/server/evidence/evaluation';
@@ -23,6 +24,7 @@ const handler = createEvidenceHandler({
   services: createServices(),
   // Source checks cost more (web search + two model calls), so the limit is tighter.
   allowRequest: createRateLimiter({ limit: 10, windowMs: 10 * 60 * 1000 }),
+  budgetMs: ROUTE_BUDGET_MS.evidence,
 });
 
 export function POST(request: Request): Promise<Response> {
