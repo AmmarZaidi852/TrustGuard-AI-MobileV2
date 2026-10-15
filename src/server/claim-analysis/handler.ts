@@ -2,6 +2,7 @@ import type { ApiErrorBody, ApiErrorCode, ClaimAnalysisRequest } from '@/core/ap
 import { ValidationError } from '@/core/errors';
 import { validateTextInput } from '@/core/validation';
 
+import { requestDeadline } from '../deadline';
 import { clientKey } from '../rate-limit';
 import type { ClaimAnalyzerFn } from './anthropic-analyzer';
 import { ClaimAnalysisError, STATUS_BY_CODE } from './errors';
@@ -10,6 +11,8 @@ export interface ClaimAnalysisHandlerDeps {
   /** `null` when the server has no provider credentials configured. */
   analyzer: ClaimAnalyzerFn | null;
   allowRequest: (key: string) => boolean;
+  /** Total time for the provider calls of one request (see `ROUTE_BUDGET_MS`). */
+  budgetMs?: number;
   log?: (message: string) => void;
 }
 
@@ -39,9 +42,12 @@ async function readRequest(request: Request): Promise<ClaimAnalysisRequest> {
 export function createClaimAnalysisHandler({
   analyzer,
   allowRequest,
+  budgetMs,
   log = (message) => console.error(message),
 }: ClaimAnalysisHandlerDeps) {
   return async function handle(request: Request): Promise<Response> {
+    // Started on arrival, like the app's timeout, so reading the body counts too.
+    const signal = requestDeadline(request, budgetMs);
     let payload: ClaimAnalysisRequest;
     try {
       payload = await readRequest(request);
@@ -55,7 +61,7 @@ export function createClaimAnalysisHandler({
     if (!analyzer) {
       return errorResponse(
         'not_configured',
-        'AI analysis is not configured on the server (missing ANTHROPIC_API_KEY).',
+        'AI analysis is not configured on the server (no usable AI provider key).',
       );
     }
 
@@ -67,13 +73,16 @@ export function createClaimAnalysisHandler({
     }
 
     try {
-      return Response.json(await analyzer(payload));
+      return Response.json(await analyzer(payload, { signal }));
     } catch (error) {
       if (error instanceof ClaimAnalysisError) {
         log(`[claim-analysis] ${error.code}: ${error.message}`);
         return errorResponse(error.code, error.message);
       }
-      log(`[claim-analysis] unexpected error: ${error instanceof Error ? error.message : error}`);
+      // Only the error type: raw messages may carry provider responses or request data.
+      log(
+        `[claim-analysis] unexpected error (${error instanceof Error ? error.name : typeof error})`,
+      );
       return errorResponse('internal', 'Unexpected error while analyzing.');
     }
   };

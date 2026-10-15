@@ -6,6 +6,8 @@ import { guardSourceEvaluation } from '@/core/evidence/source-guards';
 import type { ClaimType, SourceEvaluation } from '@/core/types';
 
 import { ApiError, mapAnthropicError } from '../api-error';
+import type { CallOptions } from '../deadline';
+import { REQUEST_EXTRAS, type RequestExtras } from '../provider-client';
 import type { CreateClient, DiscoveredSource } from './discovery';
 import { EVALUATION_SYSTEM_PROMPT, buildEvaluationUserMessage } from './prompts';
 import { clipText } from './untrusted';
@@ -88,52 +90,69 @@ export function mergeEvaluation(
   return { sources, evaluation };
 }
 
-export type SourceEvaluator = (input: {
-  claim: string;
-  claimType: ClaimType;
-  sources: DiscoveredSource[];
-  searchQueries: string[];
-}) => Promise<EvaluatedSources>;
+export type SourceEvaluator = (
+  input: {
+    claim: string;
+    claimType: ClaimType;
+    sources: DiscoveredSource[];
+    searchQueries: string[];
+  },
+  options?: CallOptions,
+) => Promise<EvaluatedSources>;
 
 export function createSourceEvaluator({
   client,
   model,
+  extras = REQUEST_EXTRAS.anthropic,
   now = () => new Date(),
 }: {
   client: CreateClient;
   model: string;
+  extras?: RequestExtras;
   now?: () => Date;
 }): SourceEvaluator {
-  return async ({ claim, claimType, sources, searchQueries }) => {
+  return async ({ claim, claimType, sources, searchQueries }, { signal } = {}) => {
     let response;
     try {
-      response = await client.beta.messages.parse({
-        model,
-        max_tokens: 16000,
-        output_config: {
-          effort: 'medium',
-          format: betaZodOutputFormat(SourceEvaluationOutputSchema),
-        },
-        betas: ['server-side-fallback-2026-07-01'],
-        fallbacks: 'default',
-        system: EVALUATION_SYSTEM_PROMPT,
-        messages: [
-          {
-            role: 'user',
-            content: buildEvaluationUserMessage(
-              claim,
-              claimType,
-              sources,
-              now().toISOString().slice(0, 10),
-            ),
+      response = await client.beta.messages.parse(
+        {
+          model,
+          max_tokens: 16000,
+          output_config: {
+            effort: 'medium',
+            format: betaZodOutputFormat(SourceEvaluationOutputSchema),
           },
-        ],
-      });
+          // Provider-specific fields (fallback model, or OpenRouter routing).
+          ...extras,
+          system: EVALUATION_SYSTEM_PROMPT,
+          messages: [
+            {
+              role: 'user',
+              content: buildEvaluationUserMessage(
+                claim,
+                claimType,
+                sources,
+                now().toISOString().slice(0, 10),
+              ),
+            },
+          ],
+        },
+        { signal },
+      );
     } catch (error) {
       const mapped = mapAnthropicError(error);
       // A provider/credential failure is reported as such; anything else about the
       // evaluation step is "sources found but not evaluated".
-      if (['not_configured', 'rate_limited', 'timeout'].includes(mapped.code)) throw mapped;
+      if (
+        [
+          'not_configured',
+          'rate_limited',
+          'provider_billing',
+          'content_blocked',
+          'timeout',
+        ].includes(mapped.code)
+      )
+        throw mapped;
       throw new ApiError('evaluation_failed', mapped.message);
     }
 

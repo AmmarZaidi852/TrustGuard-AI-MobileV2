@@ -1,15 +1,20 @@
-import Anthropic from '@anthropic-ai/sdk';
+import type Anthropic from '@anthropic-ai/sdk';
 import { betaZodOutputFormat } from '@anthropic-ai/sdk/helpers/beta/zod';
 
 import type { ClaimAnalysisRequest } from '@/core/api-contract';
 import type { ModelClaimAnalysis } from '@/core/types';
 
 import { mapAnthropicError } from '../api-error';
+import type { CallOptions } from '../deadline';
+import { REQUEST_EXTRAS, type RequestExtras, createProviderClient } from '../provider-client';
 import { ClaimAnalysisError } from './errors';
 import { CLAIM_ANALYSIS_SYSTEM_PROMPT, buildClaimAnalysisUserMessage } from './prompt';
 import { ClaimAnalysisOutputSchema, toModelClaimAnalysis } from './schema';
 
-export type ClaimAnalyzerFn = (request: ClaimAnalysisRequest) => Promise<ModelClaimAnalysis>;
+export type ClaimAnalyzerFn = (
+  request: ClaimAnalysisRequest,
+  options?: CallOptions,
+) => Promise<ModelClaimAnalysis>;
 
 /** The subset of the SDK client this module uses, so tests can substitute it. */
 export type ParseClient = Pick<Anthropic, 'beta'>;
@@ -18,35 +23,43 @@ export interface AnthropicAnalyzerOptions {
   apiKey: string;
   model: string;
   client?: ParseClient;
+  extras?: RequestExtras;
   now?: () => Date;
 }
 
 export function createAnthropicClaimAnalyzer({
   apiKey,
   model,
-  client = new Anthropic({ apiKey, timeout: 50_000, maxRetries: 1 }),
+  client = createProviderClient({ provider: 'anthropic', apiKey }, { timeout: 50_000 }),
+  extras = REQUEST_EXTRAS.anthropic,
   now = () => new Date(),
 }: AnthropicAnalyzerOptions): ClaimAnalyzerFn {
-  return async (request) => {
+  return async (request, { signal } = {}) => {
     let response;
     try {
-      response = await client.beta.messages.parse({
-        model,
-        max_tokens: 16000,
-        // Claim analysis benefits from reasoning; medium keeps latency and cost modest.
-        output_config: { effort: 'medium', format: betaZodOutputFormat(ClaimAnalysisOutputSchema) },
-        // If a safety classifier declines (e.g. sensitive health claims), retry on a
-        // fallback model inside the same call instead of failing outright.
-        betas: ['server-side-fallback-2026-07-01'],
-        fallbacks: 'default',
-        system: CLAIM_ANALYSIS_SYSTEM_PROMPT,
-        messages: [
-          {
-            role: 'user',
-            content: buildClaimAnalysisUserMessage(request, now().toISOString().slice(0, 10)),
+      response = await client.beta.messages.parse(
+        {
+          model,
+          max_tokens: 16000,
+          // Claim analysis benefits from reasoning; medium keeps latency and cost modest.
+          output_config: {
+            effort: 'medium',
+            format: betaZodOutputFormat(ClaimAnalysisOutputSchema),
           },
-        ],
-      });
+          // If a safety classifier declines (e.g. sensitive health claims), retry on a
+          // fallback model inside the same call instead of failing outright.
+          // Provider-specific fields (fallback model, or OpenRouter routing).
+          ...extras,
+          system: CLAIM_ANALYSIS_SYSTEM_PROMPT,
+          messages: [
+            {
+              role: 'user',
+              content: buildClaimAnalysisUserMessage(request, now().toISOString().slice(0, 10)),
+            },
+          ],
+        },
+        { signal },
+      );
     } catch (error) {
       throw mapAnthropicError(error);
     }

@@ -51,6 +51,14 @@ const text = (body: string, citations: unknown[] | null = null) => ({
   citations,
 });
 
+/** A search that returned the cited pages, then a text block citing them (as the API does). */
+const cited = (citations: ReturnType<typeof cite>[]) => [
+  searchResults(
+    ...[...new Set(citations.map((c) => c.url))].map((url) => ({ url, title: 'Result' })),
+  ),
+  text('a', citations),
+];
+
 describe('extractDiscoveredSources', () => {
   it('builds structured sources from provider citations', () => {
     const result = extractDiscoveredSources([
@@ -96,34 +104,47 @@ describe('extractDiscoveredSources', () => {
   });
 
   it('handles multiple sources, merging excerpts per URL', () => {
-    const result = extractDiscoveredSources([
-      text('a', [
+    const result = extractDiscoveredSources(
+      cited([
         cite('https://www.who.int/a', 'First passage.'),
         cite('https://www.who.int/a', 'Second passage.'),
         cite('https://www.who.int/a', 'Third passage.'),
         cite('https://www.reuters.com/b', 'News passage.'),
       ]),
-    ]);
+    );
     expect(result.sources).toHaveLength(2);
     expect(result.sources[0].excerpts).toEqual(['First passage.', 'Second passage.']);
     expect(result.sources.map((s) => s.id)).toEqual(['S1', 'S2']);
   });
 
   it('rejects and counts unsafe or invalid URLs', () => {
-    const result = extractDiscoveredSources([
-      text('a', [
+    const result = extractDiscoveredSources(
+      cited([
         cite('javascript:alert(1)', 'x'),
         cite('http://169.254.169.254/latest', 'metadata'),
         cite('https://user:pw@evil.example/', 'phish'),
         cite('https://www.nih.gov/ok', 'Valid passage.'),
       ]),
-    ]);
+    );
     expect(result.sources.map((s) => s.url)).toEqual(['https://www.nih.gov/ok']);
     expect(result.rejected).toBe(3);
   });
 
+  it('drops blocked low-accountability domains even if the provider ignored blocked_domains', () => {
+    const result = extractDiscoveredSources(
+      cited([
+        cite('https://www.reddit.com/r/x/comments/1', 'Forum post.'),
+        cite('https://someone.substack.com/p/proof', 'Newsletter.'),
+        cite('https://x.com/user/status/1', 'Post.'),
+        cite('https://www.nih.gov/ok', 'Valid passage.'),
+      ]),
+    );
+    expect(result.sources.map((s) => s.domain)).toEqual(['nih.gov']);
+    expect(result.rejected).toBe(3);
+  });
+
   it('drops citations without quoted text', () => {
-    const result = extractDiscoveredSources([text('a', [cite('https://www.nih.gov/ok', '   ')])]);
+    const result = extractDiscoveredSources(cited([cite('https://www.nih.gov/ok', '   ')]));
     expect(result.sources).toEqual([]);
   });
 
@@ -136,7 +157,7 @@ describe('extractDiscoveredSources', () => {
       cite('https://www.nature.com/z', 'research'),
       cite('https://another-blog.example/2', 'blog 2'),
     ];
-    const result = extractDiscoveredSources([text('a', cites)]);
+    const result = extractDiscoveredSources(cited(cites));
     expect(result.sources).toHaveLength(DISCOVERY_LIMITS.maxSources);
     expect(result.sources[0].domain).toBe('snopes.com');
     expect(result.sources.filter((s) => s.domain === 'reuters.com')).toHaveLength(
@@ -145,9 +166,9 @@ describe('extractDiscoveredSources', () => {
   });
 
   it('clips long excerpts', () => {
-    const result = extractDiscoveredSources([
-      text('a', [cite('https://www.nih.gov/ok', 'word '.repeat(300))]),
-    ]);
+    const result = extractDiscoveredSources(
+      cited([cite('https://www.nih.gov/ok', 'word '.repeat(300))]),
+    );
     expect(result.sources[0].excerpts[0].length).toBeLessThanOrEqual(
       DISCOVERY_LIMITS.maxExcerptLength,
     );
@@ -180,7 +201,7 @@ describe('createSourceDiscoverer', () => {
   it('uses the web search tool with blocked low-quality domains and escaped claim text', async () => {
     const { client, create } = mockClient({
       stop_reason: 'end_turn',
-      content: [text('a', [cite('https://www.nih.gov/ok', 'Passage.')])],
+      content: cited([cite('https://www.nih.gov/ok', 'Passage.')]),
     });
     const result = await discoverWith(client)(request);
 
@@ -206,7 +227,7 @@ describe('createSourceDiscoverer', () => {
     const first = [searchUse('q1')];
     const { client, create } = mockClient(
       { stop_reason: 'pause_turn', content: first },
-      { stop_reason: 'end_turn', content: [text('a', [cite('https://www.nih.gov/ok', 'P.')])] },
+      { stop_reason: 'end_turn', content: cited([cite('https://www.nih.gov/ok', 'P.')]) },
     );
     const result = await discoverWith(client)(request);
     expect(create).toHaveBeenCalledTimes(2);

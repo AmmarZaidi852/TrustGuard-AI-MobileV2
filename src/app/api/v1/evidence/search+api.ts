@@ -1,27 +1,30 @@
-import Anthropic from '@anthropic-ai/sdk';
-
-import { readServerEnv } from '@/server/env';
+import { ROUTE_BUDGET_MS } from '@/server/deadline';
+import { readServerEnv, warnAboutConfigProblem } from '@/server/env';
 import { createSourceDiscoverer } from '@/server/evidence/discovery';
 import { createSourceEvaluator } from '@/server/evidence/evaluation';
 import { createEvidenceHandler } from '@/server/evidence/handler';
+import { createAiProvider } from '@/server/provider-client';
 import { createRateLimiter } from '@/server/rate-limit';
 
 // Server-only route: the API key is read here and never reaches the app bundle.
 const env = readServerEnv();
+warnAboutConfigProblem(env);
 
-function createServices(apiKey: string) {
+function createServices() {
+  if (!env.ai) return null;
   // Web search plus evaluation can take a while; allow up to 90 s per provider call.
-  const client = new Anthropic({ apiKey, timeout: 90_000, maxRetries: 1 });
+  const { client, model, extras } = createAiProvider(env.ai, { timeout: 90_000 });
   return {
-    discover: createSourceDiscoverer({ client, model: env.claimModel }),
-    evaluate: createSourceEvaluator({ client, model: env.claimModel }),
+    discover: createSourceDiscoverer({ client, model, extras }),
+    evaluate: createSourceEvaluator({ client, model, extras }),
   };
 }
 
 const handler = createEvidenceHandler({
-  services: env.anthropicApiKey ? createServices(env.anthropicApiKey) : null,
+  services: createServices(),
   // Source checks cost more (web search + two model calls), so the limit is tighter.
   allowRequest: createRateLimiter({ limit: 10, windowMs: 10 * 60 * 1000 }),
+  budgetMs: ROUTE_BUDGET_MS.evidence,
 });
 
 export function POST(request: Request): Promise<Response> {

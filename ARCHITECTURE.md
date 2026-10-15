@@ -26,7 +26,7 @@ Text and images share one verification pipeline; an image only adds a reading st
 | UI components | `src/components/` | Primitives, result view, Sources section, input form                                                           |
 | Domain core   | `src/core/`       | Pure, shared by app and server: types, API contract, scoring, guard rails, URL validation, heuristics, wording |
 | App services  | `src/services/`   | Analysis pipeline, typed HTTP client, provider contracts + remote implementations, on-device history           |
-| Server        | `src/server/`     | Env, Anthropic calls, prompts, schemas, handlers, rate limiting. ESLint forbids app code from importing it     |
+| Server        | `src/server/`     | Env, provider client, Claude calls, prompts, schemas, handlers, rate limiting. ESLint forbids app imports      |
 
 ## Analysis pipeline (`src/services/analysis/pipeline.ts`)
 
@@ -112,6 +112,45 @@ shown to the user ("This image contains N claims. The main factual claim was che
   contains the image or its URI (`withoutImage` in the history store), so after a restart the
   result shows a "not stored" placeholder.
 - Only the image and its detected type are uploaded; EXIF is not requested (`exif: false`).
+
+## AI provider (Phase 5)
+
+All Claude calls go through one shared server-side client (`src/server/provider-client.ts`),
+selected by `src/server/env.ts`:
+
+| Provider   | Endpoint                                | Auth                    | Model (default)             | Extra request fields                                                                  |
+| ---------- | --------------------------------------- | ----------------------- | --------------------------- | ------------------------------------------------------------------------------------- |
+| Anthropic  | `https://api.anthropic.com/v1/messages` | `x-api-key`             | `claude-opus-5-5`           | `fallbacks: "default"` + `server-side-fallback-2026-07-01` beta                       |
+| OpenRouter | `https://openrouter.ai/api/v1/messages` | `Authorization: Bearer` | `anthropic/claude-opus-5.5` | `provider: { only: ["anthropic"], allow_fallbacks: false, require_parameters: true }` |
+
+- OpenRouter is used through its Anthropic-compatible Messages endpoint, so request shapes,
+  structured outputs, the web search tool, citations, response parsing and every guard rail are
+  the same code path for both providers.
+- OpenRouter requests are routed only to Anthropic's own upstream, with no fallback providers.
+  `require_parameters` makes a request fail rather than silently drop parameters (OpenRouter's
+  default), which could otherwise remove structured outputs or the search tool.
+- A key is only sent to the provider that issued it (`sk-ant-` / `sk-or-`), and only Claude
+  models are accepted. Host, auth header and log level are pinned in code, so `ANTHROPIC_BASE_URL`,
+  `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY` and `ANTHROPIC_LOG` in the environment cannot
+  redirect the key, add a credential or debug-log user content.
+- Errors map to stable codes without passing provider text on: 401 → `not_configured`; 402 →
+  `provider_billing` ("out of credits"); 403 → `content_blocked` when it is a moderation or
+  guardrail block (OpenRouter's `metadata.reasons` / `flagged_input`), otherwise
+  `not_configured`; 408 and client timeouts → `timeout`; 429 → `rate_limited`; 404/5xx →
+  `model_unavailable`; malformed bodies → `invalid_model_output`. Moderation metadata (which can
+  quote user content) is never logged or returned.
+- Each request has a total time budget (`server/deadline.ts`) shared by all of its provider
+  calls, SDK retries and web-search continuations: claims 55 s, images 75 s, evidence 140 s
+  (search and evaluation together). Each budget is below the app's timeout for that route (60,
+  90 and 150 s, enforced by a test), so the server stops calling the paid provider before the
+  app gives up, never after. A client disconnect, if the runtime reports it via
+  `request.signal`, cancels the calls too. The budget starts when the request arrives, before
+  the body (e.g. an image upload) is read, as the app's timeout does. A cancelled call is
+  reported as `timeout` (504), also when it is cancelled mid-body or when a provider
+  `Retry-After` is longer than the time left. Retries and up to two
+  search continuations still run while budget remains; a failed continuation fails the request
+  (no partial sources). `AbortSignal.timeout`/`any` have AbortController fallbacks in case the
+  hosting runtime lacks them.
 
 ## Source discovery and evaluation (Phase 3)
 
@@ -205,7 +244,8 @@ _Cannot verify_ and are never searched.
 
 ## Security
 
-- **Secrets:** only `src/server` and `+api.ts` files read `ANTHROPIC_API_KEY`. An ESLint
+- **Secrets:** only `src/server` and `+api.ts` files read `ANTHROPIC_API_KEY` /
+  `OPENROUTER_API_KEY`. An ESLint
   `no-restricted-imports` rule blocks app imports of server code, and the built iOS, Android and
   web bundles were scanned to confirm they contain no key reference or prompt text.
 - **Prompt injection:** claims, titles, excerpts and dates are escaped (`<`, `>` and `&`) and
@@ -224,6 +264,13 @@ _Cannot verify_ and are never searched.
   identifying people from their faces.
 - **Abuse:** the server re-validates all input; per-client in-memory rate limits (claim analysis
   20 per 10 min, source checks 10 per 10 min, image analyses 10 per 10 min) are best-effort per instance.
+  The client is keyed by Cloudflare's `CF-Connecting-IP` first; `X-Forwarded-For` (caller-
+  controlled) is only a fallback for local servers. Off Cloudflare, `CF-Connecting-IP` is
+  caller-controlled too, so the key is only as trustworthy as the proxy in front. Header values
+  that are not IP-shaped (at most 45 characters of `[0-9a-f:.]`) are ignored, and requests with
+  no usable header share one `unknown` bucket. On EAS Hosting (Cloudflare Workers) requests
+  spread over many short-lived isolates, so these limits are weaker there; the provider-side
+  spend limit is the real cap.
 
 ## Testing
 

@@ -4,6 +4,7 @@ import { CLAIM_TYPES, type ClaimType } from '@/core/types';
 import { validateTextInput } from '@/core/validation';
 
 import { ApiError, errorResponse } from '../api-error';
+import { requestDeadline } from '../deadline';
 import { clientKey } from '../rate-limit';
 import type { SourceDiscoverer } from './discovery';
 import type { SourceEvaluator } from './evaluation';
@@ -12,6 +13,8 @@ export interface EvidenceHandlerDeps {
   /** `null` when the server has no provider credentials configured. */
   services: { discover: SourceDiscoverer; evaluate: SourceEvaluator } | null;
   allowRequest: (key: string) => boolean;
+  /** Total time for search and evaluation of one request (see `ROUTE_BUDGET_MS`). */
+  budgetMs?: number;
   log?: (message: string) => void;
 }
 
@@ -43,9 +46,13 @@ async function readRequest(request: Request): Promise<EvidenceSearchRequest> {
 export function createEvidenceHandler({
   services,
   allowRequest,
+  budgetMs,
   log = (message) => console.error(message),
 }: EvidenceHandlerDeps) {
   return async function handle(request: Request): Promise<Response> {
+    // Started on arrival, like the app's timeout, so reading the body counts too.
+    // One budget for both steps: evaluation gets whatever time the search left.
+    const options = { signal: requestDeadline(request, budgetMs) };
     let payload: EvidenceSearchRequest;
     try {
       payload = await readRequest(request);
@@ -59,7 +66,7 @@ export function createEvidenceHandler({
     if (!services) {
       return errorResponse(
         'not_configured',
-        'Source checking is not configured on the server (missing ANTHROPIC_API_KEY).',
+        'Source checking is not configured on the server (no usable AI provider key).',
       );
     }
     if (!allowRequest(clientKey(request))) {
@@ -70,7 +77,7 @@ export function createEvidenceHandler({
     }
 
     try {
-      const discovered = await services.discover(payload);
+      const discovered = await services.discover(payload, options);
       if (discovered.sources.length === 0) {
         const body: EvidenceSearchResponse = {
           sources: [],
@@ -80,12 +87,15 @@ export function createEvidenceHandler({
         return Response.json(body);
       }
 
-      const evaluated = await services.evaluate({
-        claim: payload.claim,
-        claimType: payload.claimType,
-        sources: discovered.sources,
-        searchQueries: discovered.queries,
-      });
+      const evaluated = await services.evaluate(
+        {
+          claim: payload.claim,
+          claimType: payload.claimType,
+          sources: discovered.sources,
+          searchQueries: discovered.queries,
+        },
+        options,
+      );
       const body: EvidenceSearchResponse = {
         sources: evaluated.sources,
         evaluation: evaluated.evaluation,
@@ -97,7 +107,8 @@ export function createEvidenceHandler({
         log(`[evidence] ${error.code}: ${error.message}`);
         return errorResponse(error.code, error.message);
       }
-      log(`[evidence] unexpected error: ${error instanceof Error ? error.message : error}`);
+      // Only the error type: raw messages may carry provider responses or request data.
+      log(`[evidence] unexpected error (${error instanceof Error ? error.name : typeof error})`);
       return errorResponse('internal', 'Unexpected error while checking sources.');
     }
   };

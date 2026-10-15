@@ -5,6 +5,8 @@ import { evaluateSource, extractDomain } from '@/core/sources/source-evaluation'
 import { validateSourceUrl } from '@/core/sources/url-safety';
 
 import { ApiError, mapAnthropicError } from '../api-error';
+import type { CallOptions } from '../deadline';
+import { REQUEST_EXTRAS, type RequestExtras } from '../provider-client';
 import {
   BLOCKED_SEARCH_DOMAINS,
   DISCOVERY_SYSTEM_PROMPT,
@@ -60,6 +62,12 @@ interface Candidate {
   order: number;
 }
 
+function isBlockedDomain(domain: string): boolean {
+  return BLOCKED_SEARCH_DOMAINS.some(
+    (blocked) => domain === blocked || domain.endsWith(`.${blocked}`),
+  );
+}
+
 /** Pure extraction of sources from response content blocks. Exported for tests. */
 export function extractDiscoveredSources(content: unknown[]): DiscoveryResult & {
   searchErrors: string[];
@@ -72,6 +80,7 @@ export function extractDiscoveredSources(content: unknown[]): DiscoveryResult & 
   let successfulSearches = 0;
   let rejected = 0;
   const rejectedUrls = new Set<string>();
+  const citations: unknown[] = [];
 
   for (const block of content) {
     if (!isBlock(block)) continue;
@@ -95,40 +104,47 @@ export function extractDiscoveredSources(content: unknown[]): DiscoveryResult & 
           }
         }
       } else if (isBlock(block.content)) {
-        searchErrors.push(text(block.content.error_code) || 'unknown');
+        // Echoed to the client, so only well-formed codes pass through.
+        const code = text(block.content.error_code);
+        searchErrors.push(/^[a-z_]{1,40}$/.test(code) ? code : 'unknown');
       }
     }
 
     if (block.type === 'text' && Array.isArray(block.citations)) {
-      for (const citation of block.citations) {
-        if (!isBlock(citation) || citation.type !== 'web_search_result_location') continue;
-        const rawUrl = text(citation.url);
-        const url = validateSourceUrl(rawUrl);
-        const excerpt = clipText(text(citation.cited_text), DISCOVERY_LIMITS.maxExcerptLength);
-        if (!url || !excerpt) {
-          if (rawUrl && !rejectedUrls.has(rawUrl)) {
-            rejectedUrls.add(rawUrl);
-            rejected += 1;
-          }
-          continue;
-        }
-        const existing = cited.get(url);
-        if (existing) {
-          if (
-            existing.excerpts.length < DISCOVERY_LIMITS.maxExcerptsPerSource &&
-            !existing.excerpts.includes(excerpt)
-          ) {
-            existing.excerpts.push(excerpt);
-          }
-        } else {
-          cited.set(url, {
-            url,
-            title: text(citation.title),
-            excerpts: [excerpt],
-            order: cited.size,
-          });
-        }
+      citations.push(...block.citations);
+    }
+  }
+
+  // Citations are checked after every search result has been collected.
+  for (const citation of citations) {
+    if (!isBlock(citation) || citation.type !== 'web_search_result_location') continue;
+    const rawUrl = text(citation.url);
+    const url = validateSourceUrl(rawUrl);
+    const excerpt = clipText(text(citation.cited_text), DISCOVERY_LIMITS.maxExcerptLength);
+    // A citation must point at a page the search actually returned: a URL that
+    // appears only in a citation is treated as fabricated.
+    if (!url || !excerpt || !results.has(url)) {
+      if (rawUrl && !rejectedUrls.has(rawUrl)) {
+        rejectedUrls.add(rawUrl);
+        rejected += 1;
       }
+      continue;
+    }
+    const existing = cited.get(url);
+    if (existing) {
+      if (
+        existing.excerpts.length < DISCOVERY_LIMITS.maxExcerptsPerSource &&
+        !existing.excerpts.includes(excerpt)
+      ) {
+        existing.excerpts.push(excerpt);
+      }
+    } else {
+      cited.set(url, {
+        url,
+        title: text(citation.title),
+        excerpts: [excerpt],
+        order: cited.size,
+      });
     }
   }
 
@@ -141,7 +157,9 @@ export function extractDiscoveredSources(content: unknown[]): DiscoveryResult & 
   const sources: DiscoveredSource[] = [];
   for (const candidate of ranked) {
     const domain = extractDomain(candidate.url);
-    if (!domain) {
+    // Enforced here too, not only via the search tool's `blocked_domains` option,
+    // so the exclusion holds even if the provider ignores that option.
+    if (!domain || isBlockedDomain(domain)) {
       rejected += 1;
       continue;
     }
@@ -167,18 +185,23 @@ export function extractDiscoveredSources(content: unknown[]): DiscoveryResult & 
 /** The subset of the SDK client this module uses, so tests can substitute it. */
 export type CreateClient = Pick<Anthropic, 'beta'>;
 
-export type SourceDiscoverer = (request: EvidenceSearchRequest) => Promise<DiscoveryResult>;
+export type SourceDiscoverer = (
+  request: EvidenceSearchRequest,
+  options?: CallOptions,
+) => Promise<DiscoveryResult>;
 
 export function createSourceDiscoverer({
   client,
   model,
+  extras = REQUEST_EXTRAS.anthropic,
   now = () => new Date(),
 }: {
   client: CreateClient;
   model: string;
+  extras?: RequestExtras;
   now?: () => Date;
 }): SourceDiscoverer {
-  return async (request) => {
+  return async (request, { signal } = {}) => {
     const userMessage = {
       role: 'user' as const,
       content: buildDiscoveryUserMessage(request, now().toISOString().slice(0, 10)),
@@ -189,29 +212,36 @@ export function createSourceDiscoverer({
     for (let attempt = 0; attempt <= DISCOVERY_LIMITS.maxContinuations; attempt += 1) {
       let response: Anthropic.Beta.BetaMessage;
       try {
-        response = await client.beta.messages.create({
-          model,
-          max_tokens: 8000,
-          output_config: { effort: 'low' },
-          betas: ['server-side-fallback-2026-07-01'],
-          fallbacks: 'default',
-          system: DISCOVERY_SYSTEM_PROMPT,
-          tools: [
-            {
-              type: 'web_search_20260209',
-              name: 'web_search',
-              max_uses: DISCOVERY_LIMITS.maxSearches,
-              blocked_domains: BLOCKED_SEARCH_DOMAINS,
-            },
-          ],
-          messages,
-        });
+        response = await client.beta.messages.create(
+          {
+            model,
+            max_tokens: 8000,
+            output_config: { effort: 'low' },
+            // Provider-specific fields (fallback model, or OpenRouter routing).
+            ...extras,
+            system: DISCOVERY_SYSTEM_PROMPT,
+            tools: [
+              {
+                type: 'web_search_20260209',
+                name: 'web_search',
+                max_uses: DISCOVERY_LIMITS.maxSearches,
+                blocked_domains: BLOCKED_SEARCH_DOMAINS,
+              },
+            ],
+            messages,
+          },
+          // One signal for every continuation: they share the request's time budget.
+          { signal },
+        );
       } catch (error) {
         throw mapAnthropicError(error);
       }
 
       if (response.stop_reason === 'refusal') {
         throw new ApiError('model_refused', 'The AI model declined to search for this claim.');
+      }
+      if (!Array.isArray(response.content)) {
+        throw new ApiError('search_unavailable', 'The web search returned a malformed response.');
       }
       collected.push(...response.content);
 
@@ -221,10 +251,14 @@ export function createSourceDiscoverer({
     }
 
     const result = extractDiscoveredSources(collected);
-    if (result.successfulSearches === 0 && result.searchErrors.length > 0) {
+    // No search ran at all (all failed, or the model never searched, e.g. a refusal
+    // without a refusal stop reason): never report that as "searched, found nothing".
+    if (result.successfulSearches === 0) {
       throw new ApiError(
         'search_unavailable',
-        `Web search failed (${[...new Set(result.searchErrors)].join(', ')}).`,
+        result.searchErrors.length > 0
+          ? `Web search failed (${[...new Set(result.searchErrors)].join(', ')}).`
+          : 'Web search did not run.',
       );
     }
     return { sources: result.sources, queries: result.queries, rejected: result.rejected };

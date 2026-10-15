@@ -2,6 +2,7 @@ import type { ImageAnalysisRequest } from '@/core/api-contract';
 import { IMAGE_LIMITS, checkImagePayload } from '@/core/image/image-payload';
 
 import { ApiError, errorResponse } from '../api-error';
+import { requestDeadline } from '../deadline';
 import { clientKey } from '../rate-limit';
 import type { VisionAnalyzerFn } from './vision-analyzer';
 
@@ -12,6 +13,8 @@ export interface ImageHandlerDeps {
   /** `null` when the server has no provider credentials configured. */
   analyzer: VisionAnalyzerFn | null;
   allowRequest: (key: string) => boolean;
+  /** Total time for the provider call of one request (see `ROUTE_BUDGET_MS`). */
+  budgetMs?: number;
   /** Receives short messages only. Image bytes are never passed to it. */
   log?: (message: string) => void;
 }
@@ -25,9 +28,13 @@ export interface ImageHandlerDeps {
 export function createImageHandler({
   analyzer,
   allowRequest,
+  budgetMs,
   log = (message) => console.error(message),
 }: ImageHandlerDeps) {
   return async function handle(request: Request): Promise<Response> {
+    // Started before the upload is read: the app's timeout covers the upload too, so
+    // a slow upload must use up the budget rather than extend the server's work past it.
+    const signal = requestDeadline(request, budgetMs);
     const declaredLength = Number(request.headers.get('content-length') ?? 0);
     if (declaredLength > MAX_IMAGE_REQUEST_BYTES) {
       return errorResponse('image_too_large', 'The image is too large. The limit is 5 MB.');
@@ -64,7 +71,7 @@ export function createImageHandler({
     if (!analyzer) {
       return errorResponse(
         'not_configured',
-        'Image analysis is not configured on the server (missing ANTHROPIC_API_KEY).',
+        'Image analysis is not configured on the server (no usable AI provider key).',
       );
     }
     if (!allowRequest(clientKey(request))) {
@@ -75,7 +82,9 @@ export function createImageHandler({
     }
 
     try {
-      return Response.json(await analyzer({ image: check.base64, mediaType: check.mediaType }));
+      return Response.json(
+        await analyzer({ image: check.base64, mediaType: check.mediaType }, { signal }),
+      );
     } catch (error) {
       if (error instanceof ApiError) {
         log(`[image] ${error.code}: ${error.message} (${check.mediaType}, ${check.bytes} bytes)`);

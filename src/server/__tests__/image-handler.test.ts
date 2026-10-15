@@ -34,7 +34,10 @@ describe('image analysis API handler', () => {
     const body = await response.text();
     expect(JSON.parse(body)).toEqual(reading);
     expect(body).not.toContain(IMAGE_BYTES.png.slice(0, 40));
-    expect(analyzer).toHaveBeenCalledWith({ image: IMAGE_BYTES.png, mediaType: 'image/png' });
+    expect(analyzer).toHaveBeenCalledWith(
+      { image: IMAGE_BYTES.png, mediaType: 'image/png' },
+      { signal: expect.any(Object) },
+    );
   });
 
   it.each([
